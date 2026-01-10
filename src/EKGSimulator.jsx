@@ -118,6 +118,22 @@ const EKGPrintout = () => {
       name: 'Early Repolarization',
       findings: ['J-point elevation (1-4mm)', 'Concave upward ST elevation', 'Notched or slurred J-point ("fishhook")', 'Most prominent in V2-V5', 'Common in young athletes - usually benign', 'Diffuse pattern - not localized to coronary territory'],
     },
+    la_ra_reversal: {
+      name: 'LA-RA Lead Reversal',
+      findings: ['Lead I completely inverted (most obvious clue)', 'aVR and aVL appear switched', 'Lead II and III appear switched', 'Inverted P wave in lead I', 'Precordial leads normal', 'Most common lead reversal error'],
+    },
+    la_ll_reversal: {
+      name: 'LA-LL Lead Reversal',
+      findings: ['Lead III nearly flat/isoelectric', 'Lead I and II appear similar', 'aVL and aVF appear switched', 'aVR relatively unchanged', 'Precordial leads normal', 'P wave changes in limb leads'],
+    },
+    ra_ll_reversal: {
+      name: 'RA-LL Lead Reversal',
+      findings: ['Lead II nearly flat/isoelectric', 'Lead I and III inverted', 'aVR and aVF appear switched', 'aVL relatively unchanged', 'Precordial leads normal', 'Creates bizarre axis'],
+    },
+    precordial_reversal: {
+      name: 'V1-V2 Precordial Reversal',
+      findings: ['Loss of normal R wave progression', 'V1 and V2 appear switched', 'V1 may show larger R wave than expected', 'Limb leads normal', 'Can mimic pathology if not recognized', 'Check electrode placement'],
+    },
   };
 
   const getEffectiveHR = () => {
@@ -636,6 +652,73 @@ const EKGPrintout = () => {
         
         // Prominent upright T wave
         value += gaussian(normalizedT, 0.48, 0.055, 0.4 * amp.t);
+        break;
+      }
+
+      case 'la_ra_reversal': {
+        // LA-RA (Left Arm - Right Arm) reversal - most common error
+        // Lead I inverted, aVR/aVL swapped, II/III swapped
+        let reversedAmp = { ...amp };
+        if (lead === 'I') {
+          reversedAmp = { p: -amp.p, qrs: -amp.qrs, t: -amp.t };
+        } else if (lead === 'aVR') {
+          reversedAmp = leadAmplitudes['aVL'];
+        } else if (lead === 'aVL') {
+          reversedAmp = leadAmplitudes['aVR'];
+        } else if (lead === 'II') {
+          reversedAmp = leadAmplitudes['III'];
+        } else if (lead === 'III') {
+          reversedAmp = leadAmplitudes['II'];
+        }
+        value = generateNormalComplex(normalizedT, reversedAmp);
+        break;
+      }
+
+      case 'la_ll_reversal': {
+        // LA-LL (Left Arm - Left Leg) reversal
+        // Lead III flat, I and II similar, aVL/aVF swapped
+        let reversedAmp = { ...amp };
+        if (lead === 'III') {
+          reversedAmp = { p: 0.1, qrs: 0.1, t: 0.1 }; // Nearly flat
+        } else if (lead === 'II') {
+          reversedAmp = leadAmplitudes['I'];
+        } else if (lead === 'aVL') {
+          reversedAmp = leadAmplitudes['aVF'];
+        } else if (lead === 'aVF') {
+          reversedAmp = leadAmplitudes['aVL'];
+        }
+        value = generateNormalComplex(normalizedT, reversedAmp);
+        break;
+      }
+
+      case 'ra_ll_reversal': {
+        // RA-LL (Right Arm - Left Leg) reversal
+        // Lead II flat, I and III inverted, aVR/aVF swapped
+        let reversedAmp = { ...amp };
+        if (lead === 'II') {
+          reversedAmp = { p: 0.1, qrs: 0.1, t: 0.1 }; // Nearly flat
+        } else if (lead === 'I') {
+          reversedAmp = { p: -amp.p, qrs: -amp.qrs, t: -amp.t };
+        } else if (lead === 'III') {
+          reversedAmp = { p: -amp.p, qrs: -amp.qrs, t: -amp.t };
+        } else if (lead === 'aVR') {
+          reversedAmp = leadAmplitudes['aVF'];
+        } else if (lead === 'aVF') {
+          reversedAmp = leadAmplitudes['aVR'];
+        }
+        value = generateNormalComplex(normalizedT, reversedAmp);
+        break;
+      }
+
+      case 'precordial_reversal': {
+        // V1-V2 precordial lead reversal
+        let reversedAmp = { ...amp };
+        if (lead === 'V1') {
+          reversedAmp = leadAmplitudes['V2'];
+        } else if (lead === 'V2') {
+          reversedAmp = leadAmplitudes['V1'];
+        }
+        value = generateNormalComplex(normalizedT, reversedAmp);
         break;
       }
 
