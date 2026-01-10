@@ -24,7 +24,7 @@ const EKGPrintout = () => {
     },
     aflutter: {
       name: 'Atrial Flutter',
-      findings: ['Sawtooth flutter waves (F waves) best seen in II, III, aVF', 'Atrial rate ~300 bpm', 'Regular or regularly irregular ventricular response', 'Usually 2:1 conduction (ventricular rate ~150)', 'No isoelectric baseline between F waves'],
+      findings: ['Sawtooth flutter waves (F waves) best seen in II, III, aVF', 'Atrial rate ~300 bpm', 'Variable AV block: 2:1 (150), 3:1 (100), 4:1 (75)', 'Regular or regularly irregular ventricular response', 'No isoelectric baseline between F waves'],
     },
     svt: {
       name: 'SVT (AVNRT)',
@@ -32,7 +32,7 @@ const EKGPrintout = () => {
     },
     vtach: {
       name: 'Ventricular Tachycardia',
-      findings: ['Wide QRS complex >120ms', 'Regular rhythm, rate 100-250 bpm', 'AV dissociation (P waves march through)', 'Fusion and capture beats', 'Concordance in precordial leads', 'Northwest axis possible'],
+      findings: ['Wide QRS complex >120ms', 'Regular rhythm', 'Slow VT: 100-150 bpm, Fast VT: >150 bpm', 'AV dissociation (P waves march through)', 'Fusion and capture beats', 'Concordance in precordial leads'],
     },
     vfib: {
       name: 'Ventricular Fibrillation',
@@ -56,7 +56,7 @@ const EKGPrintout = () => {
     },
     third_degree: {
       name: '3rd Degree (Complete) Heart Block',
-      findings: ['Complete AV dissociation', 'P waves "march through" QRS complexes', 'Regular P-P and R-R intervals but unrelated', 'Escape rhythm: junctional (narrow, 40-60) or ventricular (wide, 20-40)', 'Atrial rate > ventricular rate'],
+      findings: ['Complete AV dissociation', 'P waves "march through" QRS complexes', 'Regular P-P and R-R intervals but unrelated', 'Junctional escape (≥40 bpm): narrow QRS, rate 40-60', 'Ventricular escape (<40 bpm): wide QRS, rate 20-40', 'Atrial rate > ventricular rate'],
     },
     rbbb: {
       name: 'Right Bundle Branch Block',
@@ -106,18 +106,48 @@ const EKGPrintout = () => {
       name: 'Long QT Syndrome',
       findings: ['Prolonged QTc (>450ms men, >460ms women)', 'Abnormal T wave morphology', 'T wave notching or bifid T waves', 'Risk of Torsades de Pointes', 'May be congenital or acquired (drugs, electrolytes)'],
     },
+    tamponade: {
+      name: 'Cardiac Tamponade',
+      findings: ['Low voltage QRS (<5mm in limb leads, <10mm in precordial)', 'Electrical alternans (alternating QRS amplitude)', 'Sinus tachycardia', 'May see PR depression', 'Beck\'s triad: hypotension, JVD, muffled heart sounds'],
+    },
+    lgl: {
+      name: 'Lown-Ganong-Levine (LGL)',
+      findings: ['Short PR interval (<120ms)', 'Normal QRS duration (<120ms)', 'NO delta wave (unlike WPW)', 'Bypass tract connects atria to bundle of His', 'Risk of SVT'],
+    },
+    early_repol: {
+      name: 'Early Repolarization',
+      findings: ['J-point elevation (1-4mm)', 'Concave upward ST elevation', 'Notched or slurred J-point ("fishhook")', 'Most prominent in V2-V5', 'Common in young athletes - usually benign', 'Diffuse pattern - not localized to coronary territory'],
+    },
   };
 
   const getEffectiveHR = () => {
     switch (pathology) {
-      case 'sinus_brady': return Math.min(heartRate, 59);
-      case 'sinus_tachy': return Math.max(heartRate, 101);
-      case 'aflutter': return 150;
-      case 'svt': return 180;
-      case 'vtach': return 160;
-      case 'third_degree': return 35;
-      case 'pe': return Math.max(heartRate, 100); // Sinus tachycardia is most common finding
+      case 'sinus_brady': return Math.min(heartRate, 59); // Bradycardia: <60
+      case 'sinus_tachy': return Math.max(heartRate, 101); // Tachycardia: >100
+      case 'aflutter': return Math.max(75, Math.min(heartRate, 150)); // 4:1 to 2:1 conduction
+      case 'svt': return Math.max(150, Math.min(heartRate, 250)); // Typical SVT range
+      case 'vtach': return Math.max(100, Math.min(heartRate, 250)); // Slow to fast VT
+      case 'third_degree': return Math.max(20, Math.min(heartRate, 60)); // Ventricular to junctional escape
+      case 'pe': return Math.max(100, Math.min(heartRate, 150)); // Sinus tachycardia
+      case 'tamponade': return Math.max(100, Math.min(heartRate, 140)); // Reflex tachycardia
       default: return heartRate;
+    }
+  };
+
+  // Get heart rate range hints for display
+  const getHRRangeHint = () => {
+    switch (pathology) {
+      case 'sinus_brady': return '(≤59 bpm)';
+      case 'sinus_tachy': return '(≥101 bpm)';
+      case 'aflutter': return '(75-150: 4:1 to 2:1 block)';
+      case 'svt': return '(150-250 bpm)';
+      case 'vtach': return '(100-250: slow to fast VT)';
+      case 'third_degree': return '(20-60: vent to junctional escape)';
+      case 'pe': return '(100-150 bpm)';
+      case 'tamponade': return '(100-140 bpm)';
+      case 'vfib': return '(chaotic - no rate)';
+      case 'asystole': return '(no activity)';
+      default: return '';
     }
   };
 
@@ -129,9 +159,10 @@ const EKGPrintout = () => {
     
     let pr = basePR;
     let qrs = 88;
-    // QT varies with heart rate (Bazett relationship) - base QT at 60bpm
-    let baseQT = 400;
-    let qt = Math.round(baseQT * Math.sqrt(60 / hr));
+    // QT varies with heart rate - using physiological relationship
+    // QT shortens as HR increases (not perfectly by Bazett, more realistic)
+    let qt = Math.round(360 + (60 - Math.min(hr, 120)) * 1.5);
+    qt = Math.max(280, Math.min(480, qt));
     let axis = 60; // Normal axis in degrees
 
     switch (pathology) {
@@ -143,13 +174,13 @@ const EKGPrintout = () => {
         break;
       case 'mobitz2':
         pr = basePR + 40;
-        qrs = 120;
+        qrs = 130; // Wide QRS (infranodal block)
         break;
       case 'third_degree':
         pr = null; // No consistent PR in complete block
-        qrs = 140;
-        qt = Math.round(480 * Math.sqrt(60 / hr));
-        axis = -30;
+        // Junctional escape (40-60) = narrow QRS, Ventricular escape (20-40) = wide QRS
+        qrs = hr >= 40 ? 95 : 160;
+        axis = hr >= 40 ? 0 : -30; // Junctional has normal axis
         break;
       case 'rbbb':
         qrs = 140;
@@ -161,22 +192,27 @@ const EKGPrintout = () => {
         break;
       case 'wpw':
         pr = Math.round(basePR * 0.6); // Short PR, proportionally reduced
-        pr = Math.max(80, Math.min(120, pr));
+        pr = Math.max(80, Math.min(119, pr)); // Strictly <120ms
         qrs = 130;
+        break;
+      case 'lgl':
+        pr = Math.round(basePR * 0.55); // Very short PR
+        pr = Math.max(70, Math.min(100, pr));
+        qrs = 88; // Normal QRS (no delta wave)
         break;
       case 'hyperkalemia':
         pr = basePR + 40;
         qrs = 140;
         break;
       case 'hypokalemia':
-        qt = Math.round(480 * Math.sqrt(60 / hr));
+        qt = Math.round(qt * 1.25);
         break;
       case 'long_qt':
-        qt = Math.round(520 * Math.sqrt(60 / hr));
+        qt = Math.round(qt * 1.4);
         break;
       case 'vtach':
         pr = null;
-        qrs = 160;
+        qrs = 180; // Very wide QRS
         axis = -90;
         break;
       case 'vfib':
@@ -199,6 +235,12 @@ const EKGPrintout = () => {
         break;
       case 'inferior_stemi':
         axis = 75;
+        break;
+      case 'tamponade':
+        qrs = 88; // Normal duration - low voltage affects amplitude, not duration
+        break;
+      case 'early_repol':
+        axis = 60;
         break;
       default:
         break;
@@ -299,15 +341,17 @@ const EKGPrintout = () => {
         value += gaussian(normalizedT, 0.3, 0.04, 0.25 * amp.t);
         break;
 
-      case 'vtach':
-        // Wide QRS monomorphic VT
-        value -= gaussian(normalizedT, 0.15, 0.02, 0.2 * Math.abs(amp.qrs));
-        value += gaussian(normalizedT, 0.2, 0.035, 1.2 * amp.qrs);
-        value -= gaussian(normalizedT, 0.28, 0.025, 0.4 * Math.abs(amp.qrs));
+      case 'vtach': {
+        // Wide QRS monomorphic VT - very wide throughout all leads
+        // Sigma values increased for much wider complexes
+        value -= gaussian(normalizedT, 0.12, 0.03, 0.15 * Math.abs(amp.qrs));
+        value += gaussian(normalizedT, 0.18, 0.05, 1.2 * amp.qrs); // Much wider R
+        value -= gaussian(normalizedT, 0.28, 0.04, 0.5 * Math.abs(amp.qrs)); // Much wider S
         // T wave with appropriate discordance (opposite to QRS)
-        const vtDiscordance = amp.qrs > 0 ? -0.35 : 0.35;
-        value += gaussian(normalizedT, 0.45, 0.06, vtDiscordance);
+        const vtDiscordance = amp.qrs > 0 ? -0.4 : 0.4;
+        value += gaussian(normalizedT, 0.48, 0.07, vtDiscordance);
         break;
+      }
 
       case 'vfib':
         value = 0.4 * (Math.sin(time * 15 + Math.sin(time * 7)) + 0.7 * Math.sin(time * 23) + 0.5 * Math.sin(time * 31)) / 2.5;
@@ -335,25 +379,39 @@ const EKGPrintout = () => {
       case 'mobitz2': {
         const beatNum = Math.floor(time / cycleLength) % 3;
         if (beatNum < 2) {
-          value = generateNormalComplex(normalizedT, amp, 0.2, 0.1);
+          // Wide QRS for infranodal block
+          value += gaussian(normalizedT, 0.1, 0.025, 0.15 * amp.p); // P wave
+          value -= gaussian(normalizedT, 0.26, 0.01, 0.1 * Math.abs(amp.qrs)); // Q wave
+          value += gaussian(normalizedT, 0.28, 0.018, 1.0 * amp.qrs); // Wide R wave
+          value -= gaussian(normalizedT, 0.32, 0.015, 0.3 * Math.abs(amp.qrs)); // Wide S wave
+          value += gaussian(normalizedT, 0.48, 0.05, 0.3 * amp.t); // T wave
         } else {
+          // Dropped QRS - only P wave
           value = gaussian(normalizedT, 0.1, 0.025, 0.15 * amp.p);
         }
         break;
       }
 
       case 'third_degree': {
-        // Atrial rate ~80 bpm, ventricular escape ~35 bpm
-        const pPhase = (time * 1.33) % 1;
-        const ventPhase = (time * 0.58) % 1;
+        // Atrial rate ~80 bpm, ventricular rate based on escape rhythm
+        const pPhase = (time * 1.33) % 1; // Atrial rate ~80
+        const ventRate = hr / 60;
+        const ventPhase = (time * ventRate) % 1;
+        
         // P waves at regular atrial rate
         value = gaussian(pPhase, 0.1, 0.025, 0.15 * amp.p);
-        // Wide QRS escape rhythm (ventricular origin)
-        value -= gaussian(ventPhase, 0.2, 0.02, 0.15 * Math.abs(amp.qrs));
-        value += gaussian(ventPhase, 0.25, 0.04, 1.0 * amp.qrs);
-        value -= gaussian(ventPhase, 0.32, 0.025, 0.3 * Math.abs(amp.qrs));
-        // T wave with appropriate discordance (opposite to QRS)
-        const tDiscordance = amp.qrs > 0 ? -0.3 : 0.3;
+        
+        // Escape rhythm: junctional (narrow, 40-60) or ventricular (wide, 20-40)
+        const isJunctional = hr >= 40; // Junctional escape is faster
+        const qrsWidth = isJunctional ? 0.012 : 0.04; // Narrow vs wide QRS
+        const qrsAmp = isJunctional ? 1.0 : 1.1;
+        
+        value -= gaussian(ventPhase, 0.2, isJunctional ? 0.008 : 0.02, 0.1 * Math.abs(amp.qrs));
+        value += gaussian(ventPhase, 0.25, qrsWidth, qrsAmp * amp.qrs);
+        value -= gaussian(ventPhase, 0.32, isJunctional ? 0.01 : 0.025, 0.3 * Math.abs(amp.qrs));
+        
+        // T wave with appropriate discordance for ventricular escape
+        const tDiscordance = (!isJunctional && amp.qrs > 0) ? -0.3 : 0.3;
         value += gaussian(ventPhase, 0.55, 0.07, tDiscordance * Math.abs(amp.t));
         break;
       }
@@ -390,31 +448,88 @@ const EKGPrintout = () => {
         }
         break;
 
-      case 'anterior_stemi':
-        value = generateNormalComplex(normalizedT, amp);
-        if (['V1', 'V2', 'V3', 'V4'].includes(lead)) value += 0.25 * gaussian(normalizedT, 0.35, 0.15, 1);
-        if (['II', 'III', 'aVF'].includes(lead)) value -= 0.1 * gaussian(normalizedT, 0.35, 0.15, 1);
-        break;
-
-      case 'inferior_stemi':
-        value = generateNormalComplex(normalizedT, amp);
-        if (['II', 'III', 'aVF'].includes(lead)) value += 0.25 * gaussian(normalizedT, 0.35, 0.15, 1);
-        if (['I', 'aVL'].includes(lead)) value -= 0.15 * gaussian(normalizedT, 0.35, 0.15, 1);
-        break;
-
-      case 'lateral_stemi':
-        value = generateNormalComplex(normalizedT, amp);
-        if (['I', 'aVL', 'V5', 'V6'].includes(lead)) value += 0.2 * gaussian(normalizedT, 0.35, 0.15, 1);
-        if (['II', 'III', 'aVF'].includes(lead)) value -= 0.1 * gaussian(normalizedT, 0.35, 0.15, 1);
-        break;
-
-      case 'posterior_stemi':
-        value = generateNormalComplex(normalizedT, amp);
-        if (['V1', 'V2', 'V3'].includes(lead)) {
-          value -= 0.2 * gaussian(normalizedT, 0.35, 0.15, 1);
-          value += gaussian(normalizedT, 0.28, 0.015, 0.4);
+      case 'anterior_stemi': {
+        // Generate base complex with flat PR segment
+        value += gaussian(normalizedT, 0.1, 0.025, 0.15 * amp.p); // P wave
+        // Flat PR segment (baseline)
+        value -= gaussian(normalizedT, 0.26, 0.008, 0.1 * Math.abs(amp.qrs)); // Q wave
+        value += gaussian(normalizedT, 0.28, 0.012, 1.0 * amp.qrs); // R wave
+        value -= gaussian(normalizedT, 0.30, 0.01, 0.25 * Math.abs(amp.qrs)); // S wave
+        
+        if (['V1', 'V2', 'V3', 'V4'].includes(lead)) {
+          // ST elevation starting at J-point with coved/tombstone morphology
+          // Elevation is relative to the flat PR baseline
+          value += 0.35 * gaussian(normalizedT, 0.32, 0.04, 1); // J-point elevation
+          value += 0.30 * gaussian(normalizedT, 0.38, 0.06, 1); // Coved ST segment
+          value += gaussian(normalizedT, 0.48, 0.05, 0.15 * amp.t); // Diminished T wave merging with ST
+        } else if (['II', 'III', 'aVF'].includes(lead)) {
+          // Reciprocal ST depression
+          value -= 0.15 * gaussian(normalizedT, 0.34, 0.08, 1);
+          value += gaussian(normalizedT, 0.48, 0.05, 0.25 * amp.t);
+        } else {
+          value += gaussian(normalizedT, 0.48, 0.05, 0.3 * amp.t); // Normal T wave
         }
         break;
+      }
+
+      case 'inferior_stemi': {
+        value += gaussian(normalizedT, 0.1, 0.025, 0.15 * amp.p);
+        value -= gaussian(normalizedT, 0.26, 0.008, 0.1 * Math.abs(amp.qrs));
+        value += gaussian(normalizedT, 0.28, 0.012, 1.0 * amp.qrs);
+        value -= gaussian(normalizedT, 0.30, 0.01, 0.25 * Math.abs(amp.qrs));
+        
+        if (['II', 'III', 'aVF'].includes(lead)) {
+          // ST elevation with coved morphology
+          value += 0.35 * gaussian(normalizedT, 0.32, 0.04, 1);
+          value += 0.30 * gaussian(normalizedT, 0.38, 0.06, 1);
+          value += gaussian(normalizedT, 0.48, 0.05, 0.15 * amp.t);
+        } else if (['I', 'aVL'].includes(lead)) {
+          // Reciprocal ST depression
+          value -= 0.18 * gaussian(normalizedT, 0.34, 0.08, 1);
+          value += gaussian(normalizedT, 0.48, 0.05, 0.25 * amp.t);
+        } else {
+          value += gaussian(normalizedT, 0.48, 0.05, 0.3 * amp.t);
+        }
+        break;
+      }
+
+      case 'lateral_stemi': {
+        value += gaussian(normalizedT, 0.1, 0.025, 0.15 * amp.p);
+        value -= gaussian(normalizedT, 0.26, 0.008, 0.1 * Math.abs(amp.qrs));
+        value += gaussian(normalizedT, 0.28, 0.012, 1.0 * amp.qrs);
+        value -= gaussian(normalizedT, 0.30, 0.01, 0.25 * Math.abs(amp.qrs));
+        
+        if (['I', 'aVL', 'V5', 'V6'].includes(lead)) {
+          // ST elevation
+          value += 0.30 * gaussian(normalizedT, 0.32, 0.04, 1);
+          value += 0.25 * gaussian(normalizedT, 0.38, 0.06, 1);
+          value += gaussian(normalizedT, 0.48, 0.05, 0.15 * amp.t);
+        } else if (['II', 'III', 'aVF'].includes(lead)) {
+          // Reciprocal depression
+          value -= 0.12 * gaussian(normalizedT, 0.34, 0.08, 1);
+          value += gaussian(normalizedT, 0.48, 0.05, 0.25 * amp.t);
+        } else {
+          value += gaussian(normalizedT, 0.48, 0.05, 0.3 * amp.t);
+        }
+        break;
+      }
+
+      case 'posterior_stemi': {
+        value += gaussian(normalizedT, 0.1, 0.025, 0.15 * amp.p);
+        value -= gaussian(normalizedT, 0.26, 0.008, 0.1 * Math.abs(amp.qrs));
+        value += gaussian(normalizedT, 0.28, 0.012, 1.0 * amp.qrs);
+        value -= gaussian(normalizedT, 0.30, 0.01, 0.25 * Math.abs(amp.qrs));
+        
+        if (['V1', 'V2', 'V3'].includes(lead)) {
+          // Reciprocal changes: ST depression + tall R waves
+          value += gaussian(normalizedT, 0.28, 0.015, 0.5); // Tall R wave (Q equivalent)
+          value -= 0.20 * gaussian(normalizedT, 0.34, 0.08, 1); // ST depression
+          value += gaussian(normalizedT, 0.48, 0.05, 0.4 * Math.abs(amp.t)); // Upright T
+        } else {
+          value += gaussian(normalizedT, 0.48, 0.05, 0.3 * amp.t);
+        }
+        break;
+      }
 
       case 'hyperkalemia':
         value += gaussian(normalizedT, 0.1, 0.03, 0.05 * amp.p); // Flattened P
@@ -468,6 +583,16 @@ const EKGPrintout = () => {
         value -= gaussian(normalizedT, 0.45, 0.05, 0.2 * amp.t);
         break;
 
+      case 'lgl':
+        // Lown-Ganong-Levine: Short PR, normal QRS, NO delta wave
+        value += gaussian(normalizedT, 0.1, 0.025, 0.15 * amp.p); // Normal P wave
+        // Short PR - QRS starts earlier (at 0.18 instead of 0.26)
+        value -= gaussian(normalizedT, 0.18, 0.008, 0.1 * Math.abs(amp.qrs)); // Q wave
+        value += gaussian(normalizedT, 0.20, 0.012, 1.0 * amp.qrs); // R wave - narrow, no delta
+        value -= gaussian(normalizedT, 0.22, 0.01, 0.25 * Math.abs(amp.qrs)); // S wave
+        value += gaussian(normalizedT, 0.38, 0.05, 0.3 * amp.t); // Normal T wave
+        break;
+
       case 'long_qt':
         value += gaussian(normalizedT, 0.1, 0.025, 0.15 * amp.p);
         value -= gaussian(normalizedT, 0.26, 0.008, 0.1 * Math.abs(amp.qrs));
@@ -477,6 +602,42 @@ const EKGPrintout = () => {
         value += gaussian(normalizedT, 0.52, 0.06, 0.25 * amp.t);
         value += gaussian(normalizedT, 0.62, 0.05, 0.3 * amp.t);
         break;
+
+      case 'tamponade': {
+        // Cardiac tamponade: low voltage + electrical alternans
+        const beatNumber = Math.floor(time / cycleLength);
+        const alternans = beatNumber % 2 === 0 ? 1.0 : 0.6; // Alternating amplitude
+        const lowVoltage = 0.5; // Reduced overall amplitude
+        
+        value += gaussian(normalizedT, 0.1, 0.025, 0.12 * amp.p * lowVoltage); // Low voltage P
+        value -= gaussian(normalizedT, 0.26, 0.008, 0.08 * Math.abs(amp.qrs) * lowVoltage * alternans);
+        value += gaussian(normalizedT, 0.28, 0.012, 0.8 * amp.qrs * lowVoltage * alternans); // Alternating QRS
+        value -= gaussian(normalizedT, 0.30, 0.01, 0.2 * Math.abs(amp.qrs) * lowVoltage * alternans);
+        value += gaussian(normalizedT, 0.45, 0.05, 0.2 * amp.t * lowVoltage * alternans);
+        break;
+      }
+
+      case 'early_repol': {
+        // Early repolarization: J-point elevation with fishhook, concave ST
+        value += gaussian(normalizedT, 0.1, 0.025, 0.15 * amp.p); // P wave
+        value -= gaussian(normalizedT, 0.26, 0.008, 0.1 * Math.abs(amp.qrs)); // Q wave
+        value += gaussian(normalizedT, 0.28, 0.012, 1.0 * amp.qrs); // R wave
+        value -= gaussian(normalizedT, 0.30, 0.01, 0.25 * Math.abs(amp.qrs)); // S wave
+        
+        // J-point notch/elevation (fishhook) - most prominent in V2-V5
+        const jPointAmp = ['V2', 'V3', 'V4', 'V5'].includes(lead) ? 0.25 :
+                         ['V1', 'V6', 'I', 'II'].includes(lead) ? 0.15 : 0.08;
+        value += gaussian(normalizedT, 0.32, 0.015, jPointAmp); // J-point notch
+        
+        // Concave upward ST elevation
+        if (!['aVR', 'V1'].includes(lead)) {
+          value += 0.1 * gaussian(normalizedT, 0.36, 0.06, 1); // Mild ST elevation
+        }
+        
+        // Prominent upright T wave
+        value += gaussian(normalizedT, 0.48, 0.055, 0.4 * amp.t);
+        break;
+      }
 
       default:
         value = generateNormalComplex(normalizedT, amp);
@@ -650,16 +811,18 @@ const EKGPrintout = () => {
                 ))}
               </select>
             </div>
-            <div className="w-48">
-              <label className="block text-sm font-medium mb-1">Heart Rate: {heartRate} bpm</label>
+            <div className="w-64">
+              <label className="block text-sm font-medium mb-1">
+                Heart Rate: {getEffectiveHR()} bpm <span className="text-gray-500 text-xs">{getHRRangeHint()}</span>
+              </label>
               <input
                 type="range"
-                min="30"
-                max="200"
+                min="20"
+                max="250"
                 value={heartRate}
                 onChange={(e) => setHeartRate(Number(e.target.value))}
                 className="w-full"
-                disabled={['aflutter', 'svt', 'vtach', 'vfib', 'third_degree', 'asystole', 'pe'].includes(pathology)}
+                disabled={['vfib', 'asystole'].includes(pathology)}
               />
             </div>
           </div>
