@@ -7,7 +7,39 @@ const EKGPrintout = () => {
   const [rrVariability, setRrVariability] = useState(5); // Default 5%
   const [waveIrregularity, setWaveIrregularity] = useState(8); // Default 8%
   const [waveWidth, setWaveWidth] = useState(68); // Default 68%
+  const [waveHeight, setWaveHeight] = useState(100); // Default 100%, range 25-200%
+  
+  // Individual wave controls (0-200%, 100% = normal)
+  const [pWaveAmp, setPWaveAmp] = useState(100);
+  const [qWaveAmp, setQWaveAmp] = useState(100);
+  const [rWaveAmp, setRWaveAmp] = useState(100);
+  const [sWaveAmp, setSWaveAmp] = useState(100);
+  const [tWaveAmp, setTWaveAmp] = useState(100);
+  
+  // ST segment controls (-100 to +100, 0 = isoelectric)
+  const [stElevation, setStElevation] = useState(0);
+  const [stDepression, setStDepression] = useState(0);
+  const [jPointCurve, setJPointCurve] = useState(60); // 0-100, controls J-point takeoff curve
+  
   const canvasRef = useRef(null);
+  
+  // Reset function to restore all defaults
+  const resetAllSettings = () => {
+    setHeartRate(75);
+    setArtifactLevel(9);
+    setRrVariability(5);
+    setWaveIrregularity(8);
+    setWaveWidth(68);
+    setWaveHeight(100);
+    setPWaveAmp(100);
+    setQWaveAmp(100);
+    setRWaveAmp(100);
+    setSWaveAmp(100);
+    setTWaveAmp(100);
+    setStElevation(0);
+    setStDepression(0);
+    setJPointCurve(60);
+  };
 
   const pathologies = {
     normal: {
@@ -276,9 +308,25 @@ const EKGPrintout = () => {
     return { pr, qrs, qt, qtc, axis };
   };
 
-  const generateWaveform = (lead, time, pathology, hr, artifactLvl = 0, rrVar = 0, waveIrreg = 0, waveWd = 100) => {
-    // Global wave width scaling factor (50-150%)
+  const generateWaveform = (lead, time, pathology, hr, artifactLvl = 0, rrVar = 0, waveIrreg = 0, waveWd = 100, waveHt = 100, pAmp = 100, qAmp = 100, rAmp = 100, sAmp = 100, tAmp = 100, stElev = 0, stDepr = 0, jCurve = 50) => {
+    // Global wave width scaling factor (50-400%)
     const widthScale = waveWd / 100;
+    
+    // Global wave height scaling factor (25-200%)
+    const heightScale = waveHt / 100;
+    
+    // Individual wave scaling factors
+    const pScale = pAmp / 100;
+    const qScale = qAmp / 100;
+    const rScale = rAmp / 100;
+    const sScale = sAmp / 100;
+    const tScale = tAmp / 100;
+    
+    // ST segment shift (elevation positive, depression negative)
+    const stShift = (stElev - stDepr) / 100;
+    
+    // J-point curve factor (0 = sharp, 100 = very curved)
+    const jCurveFactor = jCurve / 100;
     
     // Apply R-R variability (timing shifts between beats) - TRIPLED
     let timeOffset = 0;
@@ -376,16 +424,31 @@ const EKGPrintout = () => {
       amplitude * Math.exp(-Math.pow(x - (mean + morphVariation), 2) / (2 * Math.pow(sigma * widthScale, 2)));
 
     // Generate normal complex with smooth, realistic waves (not pointy)
+    // Individual wave scales (pScale, qScale, rScale, sScale, tScale) are applied here
     const generateNormalComplex = (t, amp, prInterval = 0.16, qrsWidth = 0.08) => {
       let v = 0;
       // P wave - smooth and rounded
-      v += gaussian(t, 0.1, 0.05 * qrsWidthVariation, 0.15 * amp.p * pAmpVariation);
-      // QRS - smooth transitions, not sharp spikes
-      v -= gaussian(t, 0.1 + prInterval, 0.018 * qrsWidthVariation, 0.1 * Math.abs(amp.qrs));
-      v += gaussian(t, 0.1 + prInterval + 0.02, 0.028 * qrsWidthVariation, 1.0 * amp.qrs);
-      v -= gaussian(t, 0.1 + prInterval + 0.04, 0.022 * qrsWidthVariation, 0.25 * Math.abs(amp.qrs));
+      v += gaussian(t, 0.1, 0.05 * qrsWidthVariation, 0.15 * amp.p * pAmpVariation * pScale);
+      // Q wave - small dip before R
+      v -= gaussian(t, 0.1 + prInterval, 0.018 * qrsWidthVariation, 0.1 * Math.abs(amp.qrs) * qScale);
+      // R wave - main spike
+      v += gaussian(t, 0.1 + prInterval + 0.02, 0.028 * qrsWidthVariation, 1.0 * amp.qrs * rScale);
+      // S wave - dip after R
+      v -= gaussian(t, 0.1 + prInterval + 0.04, 0.022 * qrsWidthVariation, 0.25 * Math.abs(amp.qrs) * sScale);
+      
+      // ST segment (between S wave end and T wave start) - add elevation/depression
+      const stStart = 0.1 + prInterval + 0.06;
+      const stEnd = 0.1 + prInterval + qrsWidth + 0.12;
+      if (t > stStart && t < stEnd) {
+        // Smooth ST segment shift using a plateau shape
+        const stMid = (stStart + stEnd) / 2;
+        const stWidth = (stEnd - stStart) / 2;
+        const stFactor = 1 - Math.pow((t - stMid) / stWidth, 2);
+        v += stShift * Math.max(0, stFactor) * 0.5;
+      }
+      
       // T wave - broad and smooth
-      v += gaussian(t, 0.1 + prInterval + qrsWidth + 0.16, 0.08, 0.3 * amp.t * tAmpVariation);
+      v += gaussian(t, 0.1 + prInterval + qrsWidth + 0.16, 0.08, 0.3 * amp.t * tAmpVariation * tScale);
       return v;
     };
 
@@ -514,116 +577,170 @@ const EKGPrintout = () => {
       }
 
       case 'rbbb':
-        value += gaussian(normalizedT, 0.1, 0.025, 0.15 * amp.p);
+        value += gaussian(normalizedT, 0.1, 0.025, 0.15 * amp.p * pScale);
         if (lead === 'V1' || lead === 'V2') {
           // RSR' pattern ("rabbit ears")
-          value += gaussian(normalizedT, 0.26, 0.01, 0.4);
-          value -= gaussian(normalizedT, 0.28, 0.008, 0.2);
-          value += gaussian(normalizedT, 0.31, 0.015, 0.6);
+          value += gaussian(normalizedT, 0.26, 0.01, 0.4 * rScale);
+          value -= gaussian(normalizedT, 0.28, 0.008, 0.2 * sScale);
+          value += gaussian(normalizedT, 0.31, 0.015, 0.6 * rScale);
         } else if (['I', 'aVL', 'V5', 'V6'].includes(lead)) {
           // Wide slurred S wave in lateral leads
-          value += gaussian(normalizedT, 0.26, 0.012, 0.8 * amp.qrs);
-          value -= gaussian(normalizedT, 0.3, 0.02, 0.5 * Math.abs(amp.qrs));
+          value += gaussian(normalizedT, 0.26, 0.012, 0.8 * amp.qrs * rScale);
+          value -= gaussian(normalizedT, 0.3, 0.02, 0.5 * Math.abs(amp.qrs) * sScale);
         } else {
-          value += gaussian(normalizedT, 0.26, 0.012, 1.0 * amp.qrs);
-          value -= gaussian(normalizedT, 0.3, 0.015, 0.3 * Math.abs(amp.qrs));
+          value += gaussian(normalizedT, 0.26, 0.012, 1.0 * amp.qrs * rScale);
+          value -= gaussian(normalizedT, 0.3, 0.015, 0.3 * Math.abs(amp.qrs) * sScale);
         }
-        value += gaussian(normalizedT, 0.5, 0.05, 0.3 * amp.t);
+        value += gaussian(normalizedT, 0.5, 0.05, 0.3 * amp.t * tScale);
         break;
 
       case 'lbbb':
-        value += gaussian(normalizedT, 0.1, 0.025, 0.15 * amp.p);
+        value += gaussian(normalizedT, 0.1, 0.025, 0.15 * amp.p * pScale);
         if (['V1', 'V2', 'V3'].includes(lead)) {
-          value -= gaussian(normalizedT, 0.28, 0.04, 1.2);
-          value += gaussian(normalizedT, 0.5, 0.05, 0.3);
+          value -= gaussian(normalizedT, 0.28, 0.04, 1.2 * sScale);
+          value += gaussian(normalizedT, 0.5, 0.05, 0.3 * tScale);
         } else if (['I', 'aVL', 'V5', 'V6'].includes(lead)) {
-          value += gaussian(normalizedT, 0.25, 0.02, 0.6 * amp.qrs);
-          value += gaussian(normalizedT, 0.32, 0.02, 0.8 * amp.qrs);
-          value -= gaussian(normalizedT, 0.5, 0.05, 0.3);
+          value += gaussian(normalizedT, 0.25, 0.02, 0.6 * amp.qrs * rScale);
+          value += gaussian(normalizedT, 0.32, 0.02, 0.8 * amp.qrs * rScale);
+          value -= gaussian(normalizedT, 0.5, 0.05, 0.3 * tScale);
         } else {
-          value += gaussian(normalizedT, 0.28, 0.035, 1.0 * amp.qrs);
+          value += gaussian(normalizedT, 0.28, 0.035, 1.0 * amp.qrs * rScale);
         }
         break;
 
       case 'anterior_stemi': {
-        // Generate base complex with flat PR segment
-        value += gaussian(normalizedT, 0.1, 0.025, 0.15 * amp.p); // P wave
-        // Flat PR segment (baseline)
-        value -= gaussian(normalizedT, 0.26, 0.008, 0.1 * Math.abs(amp.qrs)); // Q wave
-        value += gaussian(normalizedT, 0.28, 0.012, 1.0 * amp.qrs); // R wave
-        value -= gaussian(normalizedT, 0.30, 0.01, 0.25 * Math.abs(amp.qrs)); // S wave
+        // Generate base complex with individual wave controls
+        // STEMI defaults: S wave at -50% (inverted/minimal), wider J curve
+        const stemiSScale = sScale * -0.5; // S wave at -50%
+        const stemiRScale = rScale * 1.06; // R wave at 106%
+        const stemiJCurve = jCurveFactor + 0.5; // J curve boosted by 50%
+        
+        value += gaussian(normalizedT, 0.1, 0.04, 0.15 * amp.p * pScale); // P wave
+        value -= gaussian(normalizedT, 0.26, 0.012, 0.1 * Math.abs(amp.qrs) * qScale); // Q wave
+        value += gaussian(normalizedT, 0.28, 0.018, 1.0 * amp.qrs * stemiRScale); // R wave
+        value -= gaussian(normalizedT, 0.31, 0.015, 0.25 * Math.abs(amp.qrs) * stemiSScale); // S wave at -50%
+        
+        const anteriorSTElev = 0.35 + (stShift * 0.5);
         
         if (['V1', 'V2', 'V3', 'V4'].includes(lead)) {
-          // ST elevation starting at J-point with coved/tombstone morphology
-          // Elevation is relative to the flat PR baseline
-          value += 0.35 * gaussian(normalizedT, 0.32, 0.04, 1); // J-point elevation
-          value += 0.30 * gaussian(normalizedT, 0.38, 0.06, 1); // Coved ST segment
-          value += gaussian(normalizedT, 0.48, 0.05, 0.15 * amp.t); // Diminished T wave merging with ST
+          // J-point elevation with curved takeoff into ST segment
+          const jPointSigma = 0.05 + (stemiJCurve * 0.06); // Wider J curve
+          value += gaussian(normalizedT, 0.34, jPointSigma, anteriorSTElev * 0.7);
+          value += gaussian(normalizedT, 0.44, 0.09, anteriorSTElev * 0.85);
+          value += gaussian(normalizedT, 0.54, 0.08, anteriorSTElev * 0.5 * tScale);
         } else if (['II', 'III', 'aVF'].includes(lead)) {
-          // Reciprocal ST depression
-          value -= 0.15 * gaussian(normalizedT, 0.34, 0.08, 1);
-          value += gaussian(normalizedT, 0.48, 0.05, 0.25 * amp.t);
+          const deprAmount = 0.15 - stShift * 0.15;
+          const jPointSigma = 0.05 + (stemiJCurve * 0.05);
+          value -= gaussian(normalizedT, 0.34, jPointSigma, deprAmount * 0.5);
+          value -= gaussian(normalizedT, 0.44, 0.08, deprAmount * 0.6);
+          value += gaussian(normalizedT, 0.54, 0.07, 0.25 * amp.t * tScale);
         } else {
-          value += gaussian(normalizedT, 0.48, 0.05, 0.3 * amp.t); // Normal T wave
+          if (stShift !== 0) {
+            const jPointSigma = 0.05 + (stemiJCurve * 0.05);
+            value += gaussian(normalizedT, 0.34, jPointSigma, stShift * 0.25);
+            value += gaussian(normalizedT, 0.44, 0.08, stShift * 0.3);
+          }
+          value += gaussian(normalizedT, 0.52, 0.07, 0.3 * amp.t * tScale);
         }
         break;
       }
 
       case 'inferior_stemi': {
-        value += gaussian(normalizedT, 0.1, 0.025, 0.15 * amp.p);
-        value -= gaussian(normalizedT, 0.26, 0.008, 0.1 * Math.abs(amp.qrs));
-        value += gaussian(normalizedT, 0.28, 0.012, 1.0 * amp.qrs);
-        value -= gaussian(normalizedT, 0.30, 0.01, 0.25 * Math.abs(amp.qrs));
+        // STEMI defaults: S wave at -50%, wider J curve
+        const stemiSScale = sScale * -0.5;
+        const stemiRScale = rScale * 1.06;
+        const stemiJCurve = jCurveFactor + 0.5;
+        
+        value += gaussian(normalizedT, 0.1, 0.04, 0.15 * amp.p * pScale);
+        value -= gaussian(normalizedT, 0.26, 0.012, 0.1 * Math.abs(amp.qrs) * qScale);
+        value += gaussian(normalizedT, 0.28, 0.018, 1.0 * amp.qrs * stemiRScale);
+        value -= gaussian(normalizedT, 0.31, 0.015, 0.25 * Math.abs(amp.qrs) * stemiSScale);
+        
+        const inferiorSTElev = 0.35 + (stShift * 0.5);
         
         if (['II', 'III', 'aVF'].includes(lead)) {
-          // ST elevation with coved morphology
-          value += 0.35 * gaussian(normalizedT, 0.32, 0.04, 1);
-          value += 0.30 * gaussian(normalizedT, 0.38, 0.06, 1);
-          value += gaussian(normalizedT, 0.48, 0.05, 0.15 * amp.t);
+          const jPointSigma = 0.05 + (stemiJCurve * 0.06);
+          value += gaussian(normalizedT, 0.34, jPointSigma, inferiorSTElev * 0.7);
+          value += gaussian(normalizedT, 0.44, 0.09, inferiorSTElev * 0.85);
+          value += gaussian(normalizedT, 0.54, 0.08, inferiorSTElev * 0.5 * tScale);
         } else if (['I', 'aVL'].includes(lead)) {
-          // Reciprocal ST depression
-          value -= 0.18 * gaussian(normalizedT, 0.34, 0.08, 1);
-          value += gaussian(normalizedT, 0.48, 0.05, 0.25 * amp.t);
+          const deprAmount = 0.18 - stShift * 0.15;
+          const jPointSigma = 0.05 + (stemiJCurve * 0.05);
+          value -= gaussian(normalizedT, 0.34, jPointSigma, deprAmount * 0.5);
+          value -= gaussian(normalizedT, 0.44, 0.08, deprAmount * 0.6);
+          value += gaussian(normalizedT, 0.54, 0.07, 0.25 * amp.t * tScale);
         } else {
-          value += gaussian(normalizedT, 0.48, 0.05, 0.3 * amp.t);
+          if (stShift !== 0) {
+            const jPointSigma = 0.05 + (stemiJCurve * 0.05);
+            value += gaussian(normalizedT, 0.34, jPointSigma, stShift * 0.25);
+            value += gaussian(normalizedT, 0.44, 0.08, stShift * 0.3);
+          }
+          value += gaussian(normalizedT, 0.52, 0.07, 0.3 * amp.t * tScale);
         }
         break;
       }
 
       case 'lateral_stemi': {
-        value += gaussian(normalizedT, 0.1, 0.025, 0.15 * amp.p);
-        value -= gaussian(normalizedT, 0.26, 0.008, 0.1 * Math.abs(amp.qrs));
-        value += gaussian(normalizedT, 0.28, 0.012, 1.0 * amp.qrs);
-        value -= gaussian(normalizedT, 0.30, 0.01, 0.25 * Math.abs(amp.qrs));
+        // STEMI defaults: S wave at -50%, wider J curve
+        const stemiSScale = sScale * -0.5;
+        const stemiRScale = rScale * 1.06;
+        const stemiJCurve = jCurveFactor + 0.5;
+        
+        value += gaussian(normalizedT, 0.1, 0.04, 0.15 * amp.p * pScale);
+        value -= gaussian(normalizedT, 0.26, 0.012, 0.1 * Math.abs(amp.qrs) * qScale);
+        value += gaussian(normalizedT, 0.28, 0.018, 1.0 * amp.qrs * stemiRScale);
+        value -= gaussian(normalizedT, 0.31, 0.015, 0.25 * Math.abs(amp.qrs) * stemiSScale);
+        
+        const lateralSTElev = 0.30 + (stShift * 0.5);
         
         if (['I', 'aVL', 'V5', 'V6'].includes(lead)) {
-          // ST elevation
-          value += 0.30 * gaussian(normalizedT, 0.32, 0.04, 1);
-          value += 0.25 * gaussian(normalizedT, 0.38, 0.06, 1);
-          value += gaussian(normalizedT, 0.48, 0.05, 0.15 * amp.t);
+          const jPointSigma = 0.05 + (stemiJCurve * 0.06);
+          value += gaussian(normalizedT, 0.34, jPointSigma, lateralSTElev * 0.7);
+          value += gaussian(normalizedT, 0.44, 0.09, lateralSTElev * 0.85);
+          value += gaussian(normalizedT, 0.54, 0.08, lateralSTElev * 0.5 * tScale);
         } else if (['II', 'III', 'aVF'].includes(lead)) {
-          // Reciprocal depression
-          value -= 0.12 * gaussian(normalizedT, 0.34, 0.08, 1);
-          value += gaussian(normalizedT, 0.48, 0.05, 0.25 * amp.t);
+          const deprAmount = 0.12 - stShift * 0.15;
+          const jPointSigma = 0.05 + (stemiJCurve * 0.05);
+          value -= gaussian(normalizedT, 0.34, jPointSigma, deprAmount * 0.5);
+          value -= gaussian(normalizedT, 0.44, 0.08, deprAmount * 0.6);
+          value += gaussian(normalizedT, 0.54, 0.07, 0.25 * amp.t * tScale);
         } else {
-          value += gaussian(normalizedT, 0.48, 0.05, 0.3 * amp.t);
+          if (stShift !== 0) {
+            const jPointSigma = 0.05 + (stemiJCurve * 0.05);
+            value += gaussian(normalizedT, 0.34, jPointSigma, stShift * 0.25);
+            value += gaussian(normalizedT, 0.44, 0.08, stShift * 0.3);
+          }
+          value += gaussian(normalizedT, 0.52, 0.07, 0.3 * amp.t * tScale);
         }
         break;
       }
 
       case 'posterior_stemi': {
-        value += gaussian(normalizedT, 0.1, 0.025, 0.15 * amp.p);
-        value -= gaussian(normalizedT, 0.26, 0.008, 0.1 * Math.abs(amp.qrs));
-        value += gaussian(normalizedT, 0.28, 0.012, 1.0 * amp.qrs);
-        value -= gaussian(normalizedT, 0.30, 0.01, 0.25 * Math.abs(amp.qrs));
+        // STEMI defaults: S wave at -50%, wider J curve
+        const stemiSScale = sScale * -0.5;
+        const stemiRScale = rScale * 1.06;
+        const stemiJCurve = jCurveFactor + 0.5;
+        
+        value += gaussian(normalizedT, 0.1, 0.04, 0.15 * amp.p * pScale);
+        value -= gaussian(normalizedT, 0.26, 0.012, 0.1 * Math.abs(amp.qrs) * qScale);
+        value += gaussian(normalizedT, 0.28, 0.018, 1.0 * amp.qrs * stemiRScale);
+        value -= gaussian(normalizedT, 0.31, 0.015, 0.25 * Math.abs(amp.qrs) * stemiSScale);
         
         if (['V1', 'V2', 'V3'].includes(lead)) {
-          // Reciprocal changes: ST depression + tall R waves
-          value += gaussian(normalizedT, 0.28, 0.015, 0.5); // Tall R wave (Q equivalent)
-          value -= 0.20 * gaussian(normalizedT, 0.34, 0.08, 1); // ST depression
-          value += gaussian(normalizedT, 0.48, 0.05, 0.4 * Math.abs(amp.t)); // Upright T
+          // Reciprocal changes: ST depression with J-point + tall R waves
+          value += gaussian(normalizedT, 0.28, 0.02, 0.5 * rScale); // Tall R wave
+          const deprAmount = 0.20 - stShift * 0.2;
+          const jPointSigma = 0.05 + (stemiJCurve * 0.05);
+          value -= gaussian(normalizedT, 0.34, jPointSigma, deprAmount * 0.5);
+          value -= gaussian(normalizedT, 0.44, 0.08, deprAmount * 0.6);
+          value += gaussian(normalizedT, 0.54, 0.07, 0.4 * Math.abs(amp.t) * tScale);
         } else {
-          value += gaussian(normalizedT, 0.48, 0.05, 0.3 * amp.t);
+          if (stShift !== 0) {
+            const jPointSigma = 0.05 + (stemiJCurve * 0.05);
+            value += gaussian(normalizedT, 0.34, jPointSigma, stShift * 0.25);
+            value += gaussian(normalizedT, 0.44, 0.08, stShift * 0.3);
+          }
+          value += gaussian(normalizedT, 0.52, 0.07, 0.3 * amp.t * tScale);
         }
         break;
       }
@@ -632,30 +749,33 @@ const EKGPrintout = () => {
         // Hyperkalemia - Key features:
         // 1. DEEP S waves in V1, V2, V3 (prominent downward deflection)
         // 2. Tall peaked T waves
-        // 3. Minimal/absent P waves
+        // 3. Minimal/absent P waves (use pScale to control)
+        
+        // Minimal P wave (controlled by pScale)
+        value += gaussian(normalizedT, 0.1, 0.03, 0.05 * pScale);
         
         if (lead === 'V1') {
           // Deep S wave down
-          value += gaussian(normalizedT, 0.28, 0.035, -1.2);
+          value += gaussian(normalizedT, 0.28, 0.035, -1.2 * sScale);
           // Peaked T wave up
-          value += gaussian(normalizedT, 0.52, 0.03, 1.4);
+          value += gaussian(normalizedT, 0.52, 0.03, 1.4 * tScale);
         } else if (lead === 'V2') {
           // Deepest S wave
-          value += gaussian(normalizedT, 0.28, 0.035, -1.5);
+          value += gaussian(normalizedT, 0.28, 0.035, -1.5 * sScale);
           // Tall peaked T wave
-          value += gaussian(normalizedT, 0.52, 0.03, 2.2);
+          value += gaussian(normalizedT, 0.52, 0.03, 2.2 * tScale);
         } else if (lead === 'V3') {
           // Deep S wave
-          value += gaussian(normalizedT, 0.28, 0.035, -1.0);
+          value += gaussian(normalizedT, 0.28, 0.035, -1.0 * sScale);
           // Tallest peaked T wave
-          value += gaussian(normalizedT, 0.52, 0.03, 2.4);
+          value += gaussian(normalizedT, 0.52, 0.03, 2.4 * tScale);
         } else if (lead === 'aVR') {
           // aVR: inverted
-          value += gaussian(normalizedT, 0.28, 0.03, -0.2);
-          value += gaussian(normalizedT, 0.52, 0.03, -1.4);
+          value += gaussian(normalizedT, 0.28, 0.03, -0.2 * rScale);
+          value += gaussian(normalizedT, 0.52, 0.03, -1.4 * tScale);
         } else {
           // Limb leads and V4-V6: Small R wave, peaked T wave
-          value += gaussian(normalizedT, 0.28, 0.03, 0.25);
+          value += gaussian(normalizedT, 0.28, 0.03, 0.25 * rScale);
           let tHeight = 1.2;
           if (lead === 'II') tHeight = 1.8;
           else if (lead === 'V4') tHeight = 1.8;
@@ -664,7 +784,12 @@ const EKGPrintout = () => {
           else if (lead === 'III' || lead === 'aVF') tHeight = 1.4;
           else if (lead === 'I') tHeight = 1.2;
           else if (lead === 'aVL') tHeight = 1.0;
-          value += gaussian(normalizedT, 0.52, 0.03, tHeight);
+          value += gaussian(normalizedT, 0.52, 0.03, tHeight * tScale);
+        }
+        
+        // Apply ST shift if set
+        if (stShift !== 0) {
+          value += stShift * 0.4 * gaussian(normalizedT, 0.40, 0.06, 1);
         }
         break;
       }
@@ -840,8 +965,19 @@ const EKGPrintout = () => {
         value = generateNormalComplex(normalizedT, amp);
     }
     
+    // Apply global ST shift for pathologies that don't have specific ST handling
+    // Uses J-point curve for smooth takeoff
+    if (stShift !== 0 && !['vfib', 'asystole'].includes(pathology)) {
+      const jPointSigma = 0.03 + (jCurveFactor * 0.04);
+      value += gaussian(normalizedT, 0.33, jPointSigma, stShift * 0.3);
+      value += gaussian(normalizedT, 0.42, 0.07, stShift * 0.4);
+    }
+    
     // Apply beat-to-beat amplitude variation
     value *= ampVariation;
+    
+    // Apply global wave height scaling
+    value *= heightScale;
     
     // Add artifact/noise if enabled
     if (artifactLvl > 0) {
@@ -1019,7 +1155,7 @@ const EKGPrintout = () => {
         const pixelsPerSecond = (colWidth - 25) / duration;
         for (let px = 0; px < colWidth - 25; px++) {
           const t = px / pixelsPerSecond;
-          const value = generateWaveform(lead, t, pathology, effectiveHR, artifactLevel, rrVariability, waveIrregularity, waveWidth);
+          const value = generateWaveform(lead, t, pathology, effectiveHR, artifactLevel, rrVariability, waveIrregularity, waveWidth, waveHeight, pWaveAmp, qWaveAmp, rWaveAmp, sWaveAmp, tWaveAmp, stElevation, stDepression, jPointCurve);
           const x = startX + 20 + px;
           const y = centerY - value * 40;
           if (px === 0) ctx.moveTo(x, y);
@@ -1050,7 +1186,7 @@ const EKGPrintout = () => {
     const rhythmPixelsPerSecond = (width - 25) / rhythmDuration;
     for (let px = 0; px < width - 25; px++) {
       const t = px / rhythmPixelsPerSecond;
-      const value = generateWaveform('II', t, pathology, effectiveHR, artifactLevel, rrVariability, waveIrregularity, waveWidth);
+      const value = generateWaveform('II', t, pathology, effectiveHR, artifactLevel, rrVariability, waveIrregularity, waveWidth, waveHeight, pWaveAmp, qWaveAmp, rWaveAmp, sWaveAmp, tWaveAmp, stElevation, stDepression, jPointCurve);
       const x = 20 + px;
       const y = rhythmY + 40 - value * 40;
       if (px === 0) ctx.moveTo(x, y);
@@ -1064,7 +1200,7 @@ const EKGPrintout = () => {
     ctx.font = '10px Arial';
     ctx.fillText('25mm/s  |  10mm/mV  |  Educational Simulation Only', 10, height - 8);
 
-  }, [pathology, heartRate, artifactLevel, rrVariability, waveIrregularity, waveWidth]);
+  }, [pathology, heartRate, artifactLevel, rrVariability, waveIrregularity, waveWidth, waveHeight, pWaveAmp, qWaveAmp, rWaveAmp, sWaveAmp, tWaveAmp, stElevation, stDepression, jPointCurve]);
 
   return (
     <div className="min-h-screen bg-gray-100 p-4">
@@ -1153,6 +1289,144 @@ const EKGPrintout = () => {
                 className="w-full"
                 disabled={['vfib', 'asystole'].includes(pathology)}
               />
+            </div>
+            <div className="w-48">
+              <label className="block text-sm font-medium mb-1">
+                Wave Height: {waveHeight}%
+              </label>
+              <input
+                type="range"
+                min="25"
+                max="200"
+                value={waveHeight}
+                onChange={(e) => setWaveHeight(Number(e.target.value))}
+                className="w-full"
+                disabled={['vfib', 'asystole'].includes(pathology)}
+              />
+            </div>
+          </div>
+          
+          {/* Individual Wave Controls */}
+          <div className="flex flex-wrap gap-4 mt-3 pt-3 border-t border-gray-200">
+            <div className="w-28">
+              <label className="block text-sm font-medium mb-1">
+                P Wave: {pWaveAmp}%
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="200"
+                value={pWaveAmp}
+                onChange={(e) => setPWaveAmp(Number(e.target.value))}
+                className="w-full"
+                disabled={['vfib', 'asystole', 'afib', 'aflutter'].includes(pathology)}
+              />
+            </div>
+            <div className="w-28">
+              <label className="block text-sm font-medium mb-1">
+                Q Wave: {qWaveAmp}%
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="300"
+                value={qWaveAmp}
+                onChange={(e) => setQWaveAmp(Number(e.target.value))}
+                className="w-full"
+                disabled={['vfib', 'asystole'].includes(pathology)}
+              />
+            </div>
+            <div className="w-28">
+              <label className="block text-sm font-medium mb-1">
+                R Wave: {rWaveAmp}%
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="200"
+                value={rWaveAmp}
+                onChange={(e) => setRWaveAmp(Number(e.target.value))}
+                className="w-full"
+                disabled={['vfib', 'asystole'].includes(pathology)}
+              />
+            </div>
+            <div className="w-28">
+              <label className="block text-sm font-medium mb-1">
+                S Wave: {sWaveAmp}%
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="300"
+                value={sWaveAmp}
+                onChange={(e) => setSWaveAmp(Number(e.target.value))}
+                className="w-full"
+                disabled={['vfib', 'asystole'].includes(pathology)}
+              />
+            </div>
+            <div className="w-28">
+              <label className="block text-sm font-medium mb-1">
+                T Wave: {tWaveAmp}%
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="300"
+                value={tWaveAmp}
+                onChange={(e) => setTWaveAmp(Number(e.target.value))}
+                className="w-full"
+                disabled={['vfib', 'asystole'].includes(pathology)}
+              />
+            </div>
+            <div className="w-28">
+              <label className="block text-sm font-medium mb-1">
+                ST Elev: {stElevation}%
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={stElevation}
+                onChange={(e) => setStElevation(Number(e.target.value))}
+                className="w-full"
+                disabled={['vfib', 'asystole'].includes(pathology)}
+              />
+            </div>
+            <div className="w-28">
+              <label className="block text-sm font-medium mb-1">
+                ST Depr: {stDepression}%
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={stDepression}
+                onChange={(e) => setStDepression(Number(e.target.value))}
+                className="w-full"
+                disabled={['vfib', 'asystole'].includes(pathology)}
+              />
+            </div>
+            <div className="w-28">
+              <label className="block text-sm font-medium mb-1">
+                J-Curve: {jPointCurve}%
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={jPointCurve}
+                onChange={(e) => setJPointCurve(Number(e.target.value))}
+                className="w-full"
+                disabled={['vfib', 'asystole'].includes(pathology)}
+              />
+            </div>
+            <div className="w-28 flex items-end">
+              <button
+                onClick={resetAllSettings}
+                className="w-full bg-gray-500 hover:bg-gray-600 text-white font-medium py-1 px-3 rounded text-sm"
+              >
+                Reset All
+              </button>
             </div>
           </div>
         </div>
