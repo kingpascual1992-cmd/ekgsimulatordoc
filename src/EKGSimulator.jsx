@@ -3,10 +3,10 @@ import React, { useState, useEffect, useRef } from 'react';
 const EKGPrintout = () => {
   const [pathology, setPathology] = useState('normal');
   const [heartRate, setHeartRate] = useState(75);
-  const [artifactLevel, setArtifactLevel] = useState(0); // 0-100
-  const [rrVariability, setRrVariability] = useState(0); // 0-100 for R-R irregularity
-  const [waveIrregularity, setWaveIrregularity] = useState(0); // 0-100 for beat-to-beat morphology variation
-  const [waveWidth, setWaveWidth] = useState(100); // 50-150% wave width scaling
+  const [artifactLevel, setArtifactLevel] = useState(9); // Default 9%
+  const [rrVariability, setRrVariability] = useState(5); // Default 5%
+  const [waveIrregularity, setWaveIrregularity] = useState(8); // Default 8%
+  const [waveWidth, setWaveWidth] = useState(68); // Default 68%
   const canvasRef = useRef(null);
 
   const pathologies = {
@@ -375,17 +375,17 @@ const EKGPrintout = () => {
     const gaussian = (x, mean, sigma, amplitude) => 
       amplitude * Math.exp(-Math.pow(x - (mean + morphVariation), 2) / (2 * Math.pow(sigma * widthScale, 2)));
 
-    // Generate normal complex with independent P, QRS, T wave variations
+    // Generate normal complex with smooth, realistic waves (not pointy)
     const generateNormalComplex = (t, amp, prInterval = 0.16, qrsWidth = 0.08) => {
       let v = 0;
-      // P wave with independent amplitude variation and width scaling
-      v += gaussian(t, 0.1, 0.025 * qrsWidthVariation, 0.15 * amp.p * pAmpVariation);
-      // QRS with width and amplitude variation (sigma scaled for roundedness)
-      v -= gaussian(t, 0.1 + prInterval, 0.008 * qrsWidthVariation, 0.1 * Math.abs(amp.qrs));
-      v += gaussian(t, 0.1 + prInterval + 0.02, 0.012 * qrsWidthVariation, 1.0 * amp.qrs);
-      v -= gaussian(t, 0.1 + prInterval + 0.04, 0.01 * qrsWidthVariation, 0.25 * Math.abs(amp.qrs));
-      // T wave with independent amplitude variation
-      v += gaussian(t, 0.1 + prInterval + qrsWidth + 0.16, 0.05, 0.3 * amp.t * tAmpVariation);
+      // P wave - smooth and rounded
+      v += gaussian(t, 0.1, 0.05 * qrsWidthVariation, 0.15 * amp.p * pAmpVariation);
+      // QRS - smooth transitions, not sharp spikes
+      v -= gaussian(t, 0.1 + prInterval, 0.018 * qrsWidthVariation, 0.1 * Math.abs(amp.qrs));
+      v += gaussian(t, 0.1 + prInterval + 0.02, 0.028 * qrsWidthVariation, 1.0 * amp.qrs);
+      v -= gaussian(t, 0.1 + prInterval + 0.04, 0.022 * qrsWidthVariation, 0.25 * Math.abs(amp.qrs));
+      // T wave - broad and smooth
+      v += gaussian(t, 0.1 + prInterval + qrsWidth + 0.16, 0.08, 0.3 * amp.t * tAmpVariation);
       return v;
     };
 
@@ -629,59 +629,35 @@ const EKGPrintout = () => {
       }
 
       case 'hyperkalemia': {
-        // Hyperkalemia K+ ~7.0
-        // V1-V3: Deep S waves (downward QRS) + tall peaked T waves (upward)
-        // Other leads: Small R wave + tall peaked T waves
+        // Hyperkalemia - ULTRA SIMPLE
+        // Just: flat → tiny QRS blip → BIG PEAKED T WAVE
+        // The T wave should dominate everything
         
-        // Very minimal P wave (almost absent)
-        value += gaussian(normalizedT, 0.1, 0.02, 0.03);
-        
-        // QRS - V1, V2, V3 need prominent DEEP S waves (downward)
-        if (lead === 'V1') {
-          value += gaussian(normalizedT, 0.25, 0.018, -0.9); // Deep S wave
-        } else if (lead === 'V2') {
-          value += gaussian(normalizedT, 0.25, 0.018, -1.1); // Deeper S wave
-        } else if (lead === 'V3') {
-          value += gaussian(normalizedT, 0.25, 0.018, -0.8); // Deep S wave
+        if (lead === 'V1' || lead === 'V2' || lead === 'V3') {
+          // Anterior leads: Small S wave down, then TALL peaked T wave up
+          const sDepth = lead === 'V2' ? -0.5 : lead === 'V1' ? -0.4 : -0.35;
+          value += gaussian(normalizedT, 0.28, 0.03, sDepth);
+          // DOMINANT tall peaked T wave (sigma 0.03 = peaked but not razor sharp)
+          const tHeight = lead === 'V3' ? 2.4 : lead === 'V2' ? 2.2 : 1.4;
+          value += gaussian(normalizedT, 0.52, 0.03, tHeight);
         } else if (lead === 'aVR') {
-          value += gaussian(normalizedT, 0.25, 0.015, -0.4); // Negative in aVR
+          // aVR: inverted
+          value += gaussian(normalizedT, 0.28, 0.03, -0.15);
+          value += gaussian(normalizedT, 0.52, 0.03, -1.4);
         } else {
-          // Other leads: small positive R wave
-          value += gaussian(normalizedT, 0.25, 0.015, 0.35);
+          // Limb leads and V4-V6: Tiny R wave, DOMINANT peaked T wave
+          value += gaussian(normalizedT, 0.28, 0.03, 0.2); // Very small R
+          // DOMINANT peaked T wave
+          let tHeight = 1.2;
+          if (lead === 'II') tHeight = 1.8;
+          else if (lead === 'V4') tHeight = 1.8;
+          else if (lead === 'V5') tHeight = 1.4;
+          else if (lead === 'V6') tHeight = 1.2;
+          else if (lead === 'III' || lead === 'aVF') tHeight = 1.4;
+          else if (lead === 'I') tHeight = 1.2;
+          else if (lead === 'aVL') tHeight = 1.0;
+          value += gaussian(normalizedT, 0.52, 0.03, tHeight);
         }
-        
-        // THE MAIN FEATURE: Single tall peaked T wave (upward in all leads except aVR)
-        let tAmp;
-        if (lead === 'V2') {
-          tAmp = 2.2;
-        } else if (lead === 'V3') {
-          tAmp = 2.5;
-        } else if (lead === 'V4') {
-          tAmp = 1.8;
-        } else if (lead === 'V5') {
-          tAmp = 1.4;
-        } else if (lead === 'V6') {
-          tAmp = 1.1;
-        } else if (lead === 'V1') {
-          tAmp = 1.2;
-        } else if (lead === 'II') {
-          tAmp = 1.6;
-        } else if (lead === 'III') {
-          tAmp = 1.4;
-        } else if (lead === 'aVF') {
-          tAmp = 1.4;
-        } else if (lead === 'I') {
-          tAmp = 1.1;
-        } else if (lead === 'aVL') {
-          tAmp = 0.8;
-        } else if (lead === 'aVR') {
-          tAmp = -1.3; // Inverted T in aVR
-        } else {
-          tAmp = 1.0;
-        }
-        
-        // Single narrow peaked T wave
-        value += gaussian(normalizedT, 0.45, 0.018, tAmp);
         break;
       }
 
