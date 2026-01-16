@@ -629,25 +629,33 @@ const EKGPrintout = () => {
       }
 
       case 'hyperkalemia': {
-        // Hyperkalemia - ULTRA SIMPLE
-        // Just: flat → tiny QRS blip → BIG PEAKED T WAVE
-        // The T wave should dominate everything
+        // Hyperkalemia - Key features:
+        // 1. DEEP S waves in V1, V2, V3 (prominent downward deflection)
+        // 2. Tall peaked T waves
+        // 3. Minimal/absent P waves
         
-        if (lead === 'V1' || lead === 'V2' || lead === 'V3') {
-          // Anterior leads: Small S wave down, then TALL peaked T wave up
-          const sDepth = lead === 'V2' ? -0.5 : lead === 'V1' ? -0.4 : -0.35;
-          value += gaussian(normalizedT, 0.28, 0.03, sDepth);
-          // DOMINANT tall peaked T wave (sigma 0.03 = peaked but not razor sharp)
-          const tHeight = lead === 'V3' ? 2.4 : lead === 'V2' ? 2.2 : 1.4;
-          value += gaussian(normalizedT, 0.52, 0.03, tHeight);
+        if (lead === 'V1') {
+          // Deep S wave down
+          value += gaussian(normalizedT, 0.28, 0.035, -1.2);
+          // Peaked T wave up
+          value += gaussian(normalizedT, 0.52, 0.03, 1.4);
+        } else if (lead === 'V2') {
+          // Deepest S wave
+          value += gaussian(normalizedT, 0.28, 0.035, -1.5);
+          // Tall peaked T wave
+          value += gaussian(normalizedT, 0.52, 0.03, 2.2);
+        } else if (lead === 'V3') {
+          // Deep S wave
+          value += gaussian(normalizedT, 0.28, 0.035, -1.0);
+          // Tallest peaked T wave
+          value += gaussian(normalizedT, 0.52, 0.03, 2.4);
         } else if (lead === 'aVR') {
           // aVR: inverted
-          value += gaussian(normalizedT, 0.28, 0.03, -0.15);
+          value += gaussian(normalizedT, 0.28, 0.03, -0.2);
           value += gaussian(normalizedT, 0.52, 0.03, -1.4);
         } else {
-          // Limb leads and V4-V6: Tiny R wave, DOMINANT peaked T wave
-          value += gaussian(normalizedT, 0.28, 0.03, 0.2); // Very small R
-          // DOMINANT peaked T wave
+          // Limb leads and V4-V6: Small R wave, peaked T wave
+          value += gaussian(normalizedT, 0.28, 0.03, 0.25);
           let tHeight = 1.2;
           if (lead === 'II') tHeight = 1.8;
           else if (lead === 'V4') tHeight = 1.8;
