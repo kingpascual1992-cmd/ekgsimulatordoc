@@ -3,6 +3,10 @@ import React, { useState, useEffect, useRef } from 'react';
 const EKGPrintout = () => {
   const [pathology, setPathology] = useState('normal');
   const [heartRate, setHeartRate] = useState(75);
+  const [artifactLevel, setArtifactLevel] = useState(0); // 0-100
+  const [rrVariability, setRrVariability] = useState(0); // 0-100 for R-R irregularity
+  const [waveIrregularity, setWaveIrregularity] = useState(0); // 0-100 for beat-to-beat morphology variation
+  const [waveWidth, setWaveWidth] = useState(100); // 50-150% wave width scaling
   const canvasRef = useRef(null);
 
   const pathologies = {
@@ -84,7 +88,7 @@ const EKGPrintout = () => {
     },
     hyperkalemia: {
       name: 'Hyperkalemia',
-      findings: ['Peaked, narrow T waves (earliest sign, K+ >5.5)', 'Prolonged PR interval', 'Flattened or absent P waves', 'Widened QRS', 'Sine wave pattern (severe, K+ >8)', 'Can progress to VFib/asystole'],
+      findings: ['Tall, peaked, narrow "tented" T waves (most dramatic in V2-V3)', 'T wave height may exceed QRS amplitude', 'Mildly widened QRS', 'Flattened P waves', 'Shortened QT interval', 'Can progress to sine wave → VFib/asystole if untreated'],
     },
     hypokalemia: {
       name: 'Hypokalemia',
@@ -217,8 +221,8 @@ const EKGPrintout = () => {
         qrs = 88; // Normal QRS (no delta wave)
         break;
       case 'hyperkalemia':
-        pr = basePR + 40;
-        qrs = 140;
+        pr = basePR + 20; // Slightly prolonged PR
+        qrs = 110; // Mildly widened (not dramatic)
         break;
       case 'hypokalemia':
         qt = Math.round(qt * 1.25);
@@ -272,10 +276,82 @@ const EKGPrintout = () => {
     return { pr, qrs, qt, qtc, axis };
   };
 
-  const generateWaveform = (lead, time, pathology, hr) => {
+  const generateWaveform = (lead, time, pathology, hr, artifactLvl = 0, rrVar = 0, waveIrreg = 0, waveWd = 100) => {
+    // Global wave width scaling factor (50-150%)
+    const widthScale = waveWd / 100;
+    
+    // Apply R-R variability (timing shifts between beats) - TRIPLED
+    let timeOffset = 0;
+    if (rrVar > 0 && !['vfib', 'asystole'].includes(pathology)) {
+      // Use multiple sine waves for realistic respiratory sinus arrhythmia
+      const varAmount = rrVar / 100 * 0.25;
+      timeOffset = varAmount * (
+        Math.sin(time * 0.4) * 0.5 +  // Respiratory component (~0.2-0.4 Hz)
+        Math.sin(time * 0.7) * 0.3 + 
+        Math.sin(time * 1.5) * 0.15 +
+        Math.sin(time * 2.9) * 0.05
+      );
+    }
+    const adjustedTime = time + timeOffset;
+    
     const cycleLength = 60 / hr;
-    const t = time % cycleLength;
+    const t = adjustedTime % cycleLength;
     const normalizedT = t / cycleLength;
+    
+    // Calculate which beat we're on for beat-to-beat variation
+    const beatNumber = Math.floor(adjustedTime / cycleLength);
+    
+    // Beat-to-beat amplitude and morphology variation - MASSIVELY INCREASED
+    let ampVariation = 1.0;
+    let morphVariation = 0;
+    let qrsWidthVariation = 1.0;
+    let tAmpVariation = 1.0;
+    let pAmpVariation = 1.0;
+    if (waveIrreg > 0 && !['vfib', 'asystole'].includes(pathology)) {
+      const irregFactor = waveIrreg / 100;
+      
+      // Pseudo-random variation based on beat number (deterministic for consistency)
+      const seed1 = Math.sin(beatNumber * 12.9898) * 43758.5453;
+      const seed2 = Math.sin(beatNumber * 78.233) * 43758.5453;
+      const seed3 = Math.sin(beatNumber * 45.164) * 43758.5453;
+      const seed4 = Math.sin(beatNumber * 93.989) * 43758.5453;
+      const seed5 = Math.sin(beatNumber * 27.617) * 43758.5453;
+      const seed6 = Math.sin(beatNumber * 61.432) * 43758.5453;
+      const seed7 = Math.sin(beatNumber * 84.567) * 43758.5453;
+      const rand1 = seed1 - Math.floor(seed1);
+      const rand2 = seed2 - Math.floor(seed2);
+      const rand3 = seed3 - Math.floor(seed3);
+      const rand4 = seed4 - Math.floor(seed4);
+      const rand5 = seed5 - Math.floor(seed5);
+      const rand6 = seed6 - Math.floor(seed6);
+      const rand7 = seed7 - Math.floor(seed7);
+      
+      // QRS amplitude varies ±50% at max irregularity
+      ampVariation = 1.0 + (rand1 - 0.5) * 1.0 * irregFactor;
+      
+      // T wave amplitude varies independently ±40%
+      tAmpVariation = 1.0 + (rand3 - 0.5) * 0.8 * irregFactor;
+      
+      // P wave amplitude varies independently ±30%
+      pAmpVariation = 1.0 + (rand6 - 0.5) * 0.6 * irregFactor;
+      
+      // QRS width varies ±20%
+      qrsWidthVariation = 1.0 + (rand4 - 0.5) * 0.4 * irregFactor;
+      
+      // Global timing shift within the beat - DOUBLED
+      morphVariation = (rand2 - 0.5) * 0.12 * irregFactor;
+      
+      // Occasional dramatic variation (simulates respiratory/movement)
+      if (rand5 > 0.80) {
+        ampVariation *= (0.5 + rand5 * 0.8);
+        tAmpVariation *= (0.6 + rand7 * 0.6);
+      }
+      
+      // Occasional very small beat (simulates PVC-like or early beat appearance)
+      if (rand7 > 0.95) {
+        ampVariation *= 0.5;
+      }
+    }
 
     const leadAmplitudes = {
       'I': { p: 1, qrs: 1, t: 1 },
@@ -295,16 +371,21 @@ const EKGPrintout = () => {
     const amp = leadAmplitudes[lead] || { p: 1, qrs: 1, t: 1 };
     let value = 0;
 
+    // Gaussian with timing shift and width scaling (higher widthScale = wider, more rounded waves)
     const gaussian = (x, mean, sigma, amplitude) => 
-      amplitude * Math.exp(-Math.pow(x - mean, 2) / (2 * sigma * sigma));
+      amplitude * Math.exp(-Math.pow(x - (mean + morphVariation), 2) / (2 * Math.pow(sigma * widthScale, 2)));
 
+    // Generate normal complex with independent P, QRS, T wave variations
     const generateNormalComplex = (t, amp, prInterval = 0.16, qrsWidth = 0.08) => {
       let v = 0;
-      v += gaussian(t, 0.1, 0.025, 0.15 * amp.p);
-      v -= gaussian(t, 0.1 + prInterval, 0.008, 0.1 * Math.abs(amp.qrs));
-      v += gaussian(t, 0.1 + prInterval + 0.02, 0.012, 1.0 * amp.qrs);
-      v -= gaussian(t, 0.1 + prInterval + 0.04, 0.01, 0.25 * Math.abs(amp.qrs));
-      v += gaussian(t, 0.1 + prInterval + qrsWidth + 0.16, 0.05, 0.3 * amp.t);
+      // P wave with independent amplitude variation and width scaling
+      v += gaussian(t, 0.1, 0.025 * qrsWidthVariation, 0.15 * amp.p * pAmpVariation);
+      // QRS with width and amplitude variation (sigma scaled for roundedness)
+      v -= gaussian(t, 0.1 + prInterval, 0.008 * qrsWidthVariation, 0.1 * Math.abs(amp.qrs));
+      v += gaussian(t, 0.1 + prInterval + 0.02, 0.012 * qrsWidthVariation, 1.0 * amp.qrs);
+      v -= gaussian(t, 0.1 + prInterval + 0.04, 0.01 * qrsWidthVariation, 0.25 * Math.abs(amp.qrs));
+      // T wave with independent amplitude variation
+      v += gaussian(t, 0.1 + prInterval + qrsWidth + 0.16, 0.05, 0.3 * amp.t * tAmpVariation);
       return v;
     };
 
@@ -547,13 +628,62 @@ const EKGPrintout = () => {
         break;
       }
 
-      case 'hyperkalemia':
-        value += gaussian(normalizedT, 0.1, 0.03, 0.05 * amp.p); // Flattened P
-        value -= gaussian(normalizedT, 0.26, 0.02, 0.1 * Math.abs(amp.qrs)); // Widened QRS
-        value += gaussian(normalizedT, 0.3, 0.035, 1.0 * amp.qrs);
-        value -= gaussian(normalizedT, 0.38, 0.025, 0.3 * Math.abs(amp.qrs));
-        value += gaussian(normalizedT, 0.5, 0.025, 0.9 * amp.t); // Tall, narrow peaked T
+      case 'hyperkalemia': {
+        // Hyperkalemia K+ ~7.0
+        // V1-V3: Deep S waves (downward QRS) + tall peaked T waves (upward)
+        // Other leads: Small R wave + tall peaked T waves
+        
+        // Very minimal P wave (almost absent)
+        value += gaussian(normalizedT, 0.1, 0.02, 0.03);
+        
+        // QRS - V1, V2, V3 need prominent DEEP S waves (downward)
+        if (lead === 'V1') {
+          value += gaussian(normalizedT, 0.25, 0.018, -0.9); // Deep S wave
+        } else if (lead === 'V2') {
+          value += gaussian(normalizedT, 0.25, 0.018, -1.1); // Deeper S wave
+        } else if (lead === 'V3') {
+          value += gaussian(normalizedT, 0.25, 0.018, -0.8); // Deep S wave
+        } else if (lead === 'aVR') {
+          value += gaussian(normalizedT, 0.25, 0.015, -0.4); // Negative in aVR
+        } else {
+          // Other leads: small positive R wave
+          value += gaussian(normalizedT, 0.25, 0.015, 0.35);
+        }
+        
+        // THE MAIN FEATURE: Single tall peaked T wave (upward in all leads except aVR)
+        let tAmp;
+        if (lead === 'V2') {
+          tAmp = 2.2;
+        } else if (lead === 'V3') {
+          tAmp = 2.5;
+        } else if (lead === 'V4') {
+          tAmp = 1.8;
+        } else if (lead === 'V5') {
+          tAmp = 1.4;
+        } else if (lead === 'V6') {
+          tAmp = 1.1;
+        } else if (lead === 'V1') {
+          tAmp = 1.2;
+        } else if (lead === 'II') {
+          tAmp = 1.6;
+        } else if (lead === 'III') {
+          tAmp = 1.4;
+        } else if (lead === 'aVF') {
+          tAmp = 1.4;
+        } else if (lead === 'I') {
+          tAmp = 1.1;
+        } else if (lead === 'aVL') {
+          tAmp = 0.8;
+        } else if (lead === 'aVR') {
+          tAmp = -1.3; // Inverted T in aVR
+        } else {
+          tAmp = 1.0;
+        }
+        
+        // Single narrow peaked T wave
+        value += gaussian(normalizedT, 0.45, 0.018, tAmp);
         break;
+      }
 
       case 'hypokalemia':
         value = generateNormalComplex(normalizedT, amp);
@@ -725,6 +855,68 @@ const EKGPrintout = () => {
       default:
         value = generateNormalComplex(normalizedT, amp);
     }
+    
+    // Apply beat-to-beat amplitude variation
+    value *= ampVariation;
+    
+    // Add artifact/noise if enabled
+    if (artifactLvl > 0) {
+      const artFactor = artifactLvl / 100;
+      
+      // Baseline wander (respiratory ~0.2-0.4 Hz) - DOUBLED
+      const baselineWander = artFactor * 0.5 * (
+        Math.sin(time * 0.25) * 0.5 +
+        Math.sin(time * 0.4) * 0.3 +
+        Math.sin(time * 0.15) * 0.2
+      );
+      
+      // Slow drift (very low frequency baseline shift) - DOUBLED
+      const slowDrift = artFactor * 0.3 * Math.sin(time * 0.08);
+      
+      // Muscle artifact / EMG noise (high frequency tremor) - TRIPLED
+      const muscleArtifact = artFactor * 0.35 * (
+        Math.sin(time * 47) * 0.25 +
+        Math.sin(time * 63) * 0.2 +
+        Math.sin(time * 89) * 0.2 +
+        Math.sin(time * 37) * 0.15 +
+        Math.sin(time * 113) * 0.1 +
+        Math.sin(time * 157) * 0.1
+      );
+      
+      // 60Hz interference (power line) - QUADRUPLED
+      const powerLine = artFactor * 0.15 * Math.sin(time * 60 * 2 * Math.PI);
+      
+      // Random high-frequency noise - TRIPLED
+      const randomNoise = artFactor * 0.18 * (Math.random() - 0.5);
+      
+      // Electrode contact noise (scratchy appearance)
+      const contactNoise = artFactor * 0.1 * (
+        Math.random() * Math.sin(time * 200) +
+        Math.random() * Math.sin(time * 350) * 0.5
+      );
+      
+      // Occasional baseline jumps/shifts (electrode movement) - MORE FREQUENT
+      const jumpPhase1 = Math.sin(time * 0.5);
+      const jumpPhase2 = Math.sin(time * 0.7);
+      const baselineJump = artFactor * 0.25 * (
+        (jumpPhase1 > 0.92 ? 1 : jumpPhase1 < -0.92 ? -1 : 0) +
+        (jumpPhase2 > 0.94 ? 0.7 : jumpPhase2 < -0.94 ? -0.7 : 0)
+      );
+      
+      // Motion artifact spikes (sharp deflections) - MORE FREQUENT & LARGER
+      const motionSpike = artFactor * 0.5 * (
+        (Math.sin(time * 1.7) > 0.96 ? (Math.random() - 0.5) * 2 : 0) +
+        (Math.sin(time * 2.3) > 0.95 ? (Math.random() - 0.5) * 2 : 0) +
+        (Math.sin(time * 3.1) > 0.97 ? (Math.random() - 0.5) * 1.5 : 0)
+      );
+      
+      // Intermittent electrode disconnect (brief flatline segments)
+      const disconnectPhase = Math.sin(time * 0.3);
+      const electrodeDisconnect = (disconnectPhase > 0.98) ? -value * artFactor * 0.8 : 0;
+      
+      value += baselineWander + slowDrift + muscleArtifact + powerLine + randomNoise + contactNoise + baselineJump + motionSpike + electrodeDisconnect;
+    }
+    
     return value;
   };
 
@@ -817,7 +1009,9 @@ const EKGPrintout = () => {
     const rowHeight = (gridHeight - 100) / 3;
     const duration = 2.5; // seconds per strip
 
-    // Draw each lead
+    // Draw each lead - allow vertical bleed between rows but not into header/footer
+    const gridBottomY = height - 25; // Allow bleed almost to bottom, footer will draw over
+    
     leads.forEach((row, rowIndex) => {
       row.forEach((lead, colIndex) => {
         const startX = colIndex * colWidth;
@@ -829,30 +1023,42 @@ const EKGPrintout = () => {
         ctx.font = 'bold 12px Arial';
         ctx.fillText(lead, startX + 5, startY + 15);
 
-        // Draw waveform
+        // Draw waveform with clipping only for header - allow vertical bleed between rows
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, gridStartY, width, gridBottomY - gridStartY);
+        ctx.clip();
+        
         ctx.strokeStyle = '#000';
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         const pixelsPerSecond = (colWidth - 25) / duration;
         for (let px = 0; px < colWidth - 25; px++) {
           const t = px / pixelsPerSecond;
-          const value = generateWaveform(lead, t, pathology, effectiveHR);
+          const value = generateWaveform(lead, t, pathology, effectiveHR, artifactLevel, rrVariability, waveIrregularity, waveWidth);
           const x = startX + 20 + px;
           const y = centerY - value * 40;
           if (px === 0) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
         }
         ctx.stroke();
+        ctx.restore();
       });
     });
 
     // Rhythm strip (Lead II) at bottom
     const rhythmY = height - 90;
+    
     ctx.fillStyle = '#000';
     ctx.font = 'bold 12px Arial';
     ctx.fillText('II', 5, rhythmY + 15);
 
-    // Long rhythm strip
+    // Long rhythm strip - clip only at very bottom for footer text
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, rhythmY - 40, width, 110); // Allow plenty of vertical room
+    ctx.clip();
+    
     ctx.strokeStyle = '#000';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
@@ -860,20 +1066,21 @@ const EKGPrintout = () => {
     const rhythmPixelsPerSecond = (width - 25) / rhythmDuration;
     for (let px = 0; px < width - 25; px++) {
       const t = px / rhythmPixelsPerSecond;
-      const value = generateWaveform('II', t, pathology, effectiveHR);
+      const value = generateWaveform('II', t, pathology, effectiveHR, artifactLevel, rrVariability, waveIrregularity, waveWidth);
       const x = 20 + px;
       const y = rhythmY + 40 - value * 40;
       if (px === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
     ctx.stroke();
+    ctx.restore();
 
     // Footer info
     ctx.fillStyle = '#666';
     ctx.font = '10px Arial';
     ctx.fillText('25mm/s  |  10mm/mV  |  Educational Simulation Only', 10, height - 8);
 
-  }, [pathology, heartRate]);
+  }, [pathology, heartRate, artifactLevel, rrVariability, waveIrregularity, waveWidth]);
 
   return (
     <div className="min-h-screen bg-gray-100 p-4">
@@ -904,6 +1111,61 @@ const EKGPrintout = () => {
                 max="250"
                 value={heartRate}
                 onChange={(e) => setHeartRate(Number(e.target.value))}
+                className="w-full"
+                disabled={['vfib', 'asystole'].includes(pathology)}
+              />
+            </div>
+            <div className="w-48">
+              <label className="block text-sm font-medium mb-1">
+                Artifact: {artifactLevel}%
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={artifactLevel}
+                onChange={(e) => setArtifactLevel(Number(e.target.value))}
+                className="w-full"
+              />
+            </div>
+            <div className="w-48">
+              <label className="block text-sm font-medium mb-1">
+                R-R Variability: {rrVariability}%
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={rrVariability}
+                onChange={(e) => setRrVariability(Number(e.target.value))}
+                className="w-full"
+                disabled={['vfib', 'asystole', 'afib'].includes(pathology)}
+              />
+            </div>
+            <div className="w-48">
+              <label className="block text-sm font-medium mb-1">
+                Wave Variation: {waveIrregularity}%
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={waveIrregularity}
+                onChange={(e) => setWaveIrregularity(Number(e.target.value))}
+                className="w-full"
+                disabled={['vfib', 'asystole'].includes(pathology)}
+              />
+            </div>
+            <div className="w-48">
+              <label className="block text-sm font-medium mb-1">
+                Wave Width: {waveWidth}% <span className="text-gray-500 text-xs">(wider=rounder)</span>
+              </label>
+              <input
+                type="range"
+                min="50"
+                max="400"
+                value={waveWidth}
+                onChange={(e) => setWaveWidth(Number(e.target.value))}
                 className="w-full"
                 disabled={['vfib', 'asystole'].includes(pathology)}
               />
