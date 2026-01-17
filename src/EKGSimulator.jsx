@@ -79,6 +79,7 @@ const EKGPrintout = () => {
   const [stSlope, setStSlope] = useState(0); // -100 to +100: negative=downsloping, 0=flat, positive=upsloping
   const [stConcavity, setStConcavity] = useState(0); // -100 to +100: controls R wave downslope steepness
   const [tWaveDescent, setTWaveDescent] = useState(0); // -100 to +100: controls T wave downslope steepness
+  const [tWaveBiphasic, setTWaveBiphasic] = useState(0); // -100 to +100: controls biphasic T wave (neg=initial inversion, pos=terminal inversion)
   
   // Calculate interval values in ms for display
   const getIntervalValues = () => {
@@ -185,6 +186,7 @@ const EKGPrintout = () => {
         stSlope: 0,
         stConcavity: 0,
         tWaveDescent: 0,
+        tWaveBiphasic: 0,
         waveHeight: 100,
         waveWidth: 100
       },
@@ -237,6 +239,7 @@ const EKGPrintout = () => {
         stSlope: 0,
         stConcavity: 0,
         tWaveDescent: 0,
+        tWaveBiphasic: 0,
         waveHeight: 100,
         waveWidth: 100
       },
@@ -259,6 +262,7 @@ const EKGPrintout = () => {
         stSlope: 0,
         stConcavity: 0,
         tWaveDescent: 0,
+        tWaveBiphasic: 0,
         waveHeight: 100,
         waveWidth: 100
       },
@@ -287,6 +291,7 @@ const EKGPrintout = () => {
         if (preset.globals.stSlope !== undefined) setStSlope(preset.globals.stSlope);
         if (preset.globals.stConcavity !== undefined) setStConcavity(preset.globals.stConcavity);
         if (preset.globals.tWaveDescent !== undefined) setTWaveDescent(preset.globals.tWaveDescent);
+        if (preset.globals.tWaveBiphasic !== undefined) setTWaveBiphasic(preset.globals.tWaveBiphasic);
         if (preset.globals.waveHeight !== undefined) setWaveHeight(preset.globals.waveHeight);
         if (preset.globals.waveWidth !== undefined) setWaveWidth(preset.globals.waveWidth);
       }
@@ -312,6 +317,7 @@ const EKGPrintout = () => {
       setStSlope(0);
       setStConcavity(0);
       setTWaveDescent(0);
+      setTWaveBiphasic(0);
       setWaveHeight(100);
       setWaveWidth(100);
     }
@@ -685,7 +691,7 @@ const EKGPrintout = () => {
     return { pr, qrs, qt, qtc, axis };
   };
 
-  const generateWaveform = (lead, time, pathology, hr, artifactLvl = 0, rrVar = 0, waveIrreg = 0, prInt = 100, qrsWd = 100, qtInt = 100, waveHt = 100, waveWd = 100, pAmp = 100, qAmp = 100, rAmp = 100, sAmp = 100, tAmp = 100, stElev = 0, stDepr = 0, jCurve = 50, stSl = 0, stConc = 0, tDesc = 0, overrides = {}) => {
+  const generateWaveform = (lead, time, pathology, hr, artifactLvl = 0, rrVar = 0, waveIrreg = 0, prInt = 100, qrsWd = 100, qtInt = 100, waveHt = 100, waveWd = 100, pAmp = 100, qAmp = 100, rAmp = 100, sAmp = 100, tAmp = 100, stElev = 0, stDepr = 0, jCurve = 50, stSl = 0, stConc = 0, tDesc = 0, tBi = 0, overrides = {}) => {
     // Check for lead-specific overrides (intervals are global, not per-lead)
     const lo = overrides[lead] || {};
     const effectivePAmp = lo.pWaveAmp ?? pAmp;
@@ -701,6 +707,7 @@ const EKGPrintout = () => {
     const effectiveStSlope = lo.stSlope ?? stSl;
     const effectiveStConcavity = lo.stConcavity ?? stConc;
     const effectiveTWaveDescent = lo.tWaveDescent ?? tDesc;
+    const effectiveTWaveBiphasic = lo.tWaveBiphasic ?? tBi;
     
     // Interval scaling factors (100% = normal) - GLOBAL timing, not per-lead
     const prScale = prInt / 100; // PR interval scale (timing)
@@ -735,6 +742,9 @@ const EKGPrintout = () => {
     
     // T wave descent factor (-100 = steep/sharp descent, 0 = symmetric, +100 = gradual/prolonged descent)
     const tDescentFactor = effectiveTWaveDescent / 100;
+    
+    // T wave biphasic factor (-100 = negative-then-positive, 0 = monophasic, +100 = positive-then-negative/terminal inversion)
+    const biphasicFactor = effectiveTWaveBiphasic / 100;
     
     // Apply R-R variability (timing shifts between beats) - TRIPLED
     let timeOffset = 0;
@@ -852,6 +862,39 @@ const EKGPrintout = () => {
       
       return amplitude * Math.exp(-Math.pow(xPos, 2) / (2 * Math.pow(effectiveSigma, 2)));
     };
+    
+    // Biphasic T wave generator
+    // biphasicFactor: -1 = negative-then-positive (initial inversion)
+    //                  0 = monophasic (normal)
+    //                 +1 = positive-then-negative (terminal inversion, like Wellens)
+    const biphasicTWave = (x, position, width, amplitude, tDescentFac, biphasicFac) => {
+      // Primary T wave component
+      const primaryT = asymmetricGaussian(x, position, width, amplitude, tDescentFac);
+      
+      // If no biphasic effect, return primary only
+      if (Math.abs(biphasicFac) < 0.01) {
+        return primaryT;
+      }
+      
+      // Calculate secondary component
+      const absEffect = Math.abs(biphasicFac);
+      const secondaryAmp = -amplitude * absEffect * 0.7; // Opposite polarity, scaled by factor
+      
+      // Position offset for secondary component
+      // Positive factor: terminal inversion (secondary comes AFTER primary)
+      // Negative factor: initial inversion (secondary comes BEFORE primary)
+      const offsetDirection = biphasicFac > 0 ? 1 : -1;
+      const secondaryOffset = offsetDirection * width * 1.2;
+      const secondaryPosition = position + secondaryOffset;
+      const secondaryWidth = width * 0.8; // Slightly narrower secondary component
+      
+      const secondaryT = asymmetricGaussian(x, secondaryPosition, secondaryWidth, secondaryAmp, tDescentFac * 0.5);
+      
+      // Blend: reduce primary amplitude slightly as biphasic increases
+      const primaryReduction = 1 - absEffect * 0.2;
+      
+      return primaryT * primaryReduction + secondaryT;
+    };
 
     // Generate normal complex with smooth, realistic waves (not pointy)
     // Individual wave scales (pScale, qScale, rScale, sScale, tScale) are applied here
@@ -931,10 +974,10 @@ const EKGPrintout = () => {
       // T wave - positioned at end of QT interval
       // Normal T wave duration ~120-160ms, gaussian sigma should be ~1/4 of that (~35ms)
       // T wave position scales with QT, but width should remain constant
-      // Using asymmetricGaussian: tDescentFactor controls downslope steepness
+      // Using biphasicTWave: tDescentFactor controls downslope steepness, biphasicFactor controls biphasic morphology
       const tPosition = qrsStart + scaledQtInterval * 0.85; // T wave peak at ~85% of QT
       const tWidth = 35 / cycleLengthMs; // ~35ms sigma for realistic narrow T wave (NOT scaled by qtScale)
-      v += asymmetricGaussian(t, tPosition, tWidth * qrsWidthVariation, 0.3 * amp.t * tAmpVariation * tScale, tDescentFactor);
+      v += biphasicTWave(t, tPosition, tWidth * qrsWidthVariation, 0.3 * amp.t * tAmpVariation * tScale, tDescentFactor, biphasicFactor);
       
       return v;
     };
@@ -987,7 +1030,7 @@ const EKGPrintout = () => {
         // T wave - position scales with QT
         const tPosition = qrsStartNorm + qtDuration * 0.85;
         const tWidth = 35 / cycleLengthMs;
-        value += asymmetricGaussian(adjustedT, tPosition, tWidth, 0.3 * amp.t * tScale, tDescentFactor);
+        value += biphasicTWave(adjustedT, tPosition, tWidth, 0.3 * amp.t * tScale, tDescentFactor, biphasicFactor);
         break;
       }
 
@@ -1039,7 +1082,7 @@ const EKGPrintout = () => {
         // T wave
         const tPosition = qrsStartNorm + qtDuration * 0.85;
         const tWidth = 35 / cycleLengthMs;
-        value += asymmetricGaussian(normalizedT, tPosition, tWidth, 0.2 * amp.t * tScale, tDescentFactor);
+        value += biphasicTWave(normalizedT, tPosition, tWidth, 0.2 * amp.t * tScale, tDescentFactor, biphasicFactor);
         break;
       }
 
@@ -1078,7 +1121,7 @@ const EKGPrintout = () => {
         // T wave
         const tPosition = qrsStartNorm + qtDuration * 0.85;
         const tWidth = 35 / cycleLengthMs;
-        value += asymmetricGaussian(normalizedT, tPosition, tWidth, 0.25 * amp.t * tScale, tDescentFactor);
+        value += biphasicTWave(normalizedT, tPosition, tWidth, 0.25 * amp.t * tScale, tDescentFactor, biphasicFactor);
         break;
       }
 
@@ -1115,7 +1158,7 @@ const EKGPrintout = () => {
         const tPosition = qrsStartNorm + qtDuration * 0.85;
         const tWidth = 50 / cycleLengthMs;
         const vtDiscordance = vtAmp > 0 ? -0.4 * tScale : 0.4 * tScale;
-        value += asymmetricGaussian(normalizedT, tPosition, tWidth, vtDiscordance, tDescentFactor);
+        value += biphasicTWave(normalizedT, tPosition, tWidth, vtDiscordance, tDescentFactor, biphasicFactor);
         break;
       }
 
@@ -1189,7 +1232,7 @@ const EKGPrintout = () => {
           // T wave
           const tPosition = qrsStart + qtDuration * 0.85;
           const tWidth = 50 / cycleLengthMs;
-          value += asymmetricGaussian(normalizedT, tPosition, tWidth, 0.3 * amp.t * tScale, tDescentFactor);
+          value += biphasicTWave(normalizedT, tPosition, tWidth, 0.3 * amp.t * tScale, tDescentFactor, biphasicFactor);
         } else {
           // Dropped QRS - only P wave
           const pStart = 80 / cycleLengthMs;
@@ -1247,7 +1290,7 @@ const EKGPrintout = () => {
         const tPosition = qrsStartNorm + qtDuration * 0.85;
         const tWidth = 50 / cycleLengthMs;
         const tDiscordance = (!isJunctional && amp.r > 0) ? -0.3 : 0.3;
-        value += asymmetricGaussian(ventPhase, tPosition, tWidth, tDiscordance * Math.abs(amp.t) * tScale, tDescentFactor);
+        value += biphasicTWave(ventPhase, tPosition, tWidth, tDiscordance * Math.abs(amp.t) * tScale, tDescentFactor, biphasicFactor);
         break;
       }
 
@@ -1310,7 +1353,7 @@ const EKGPrintout = () => {
         // T wave
         const tPosition = qrsStart + qtDuration * 0.85;
         const tWidth = 45 / cycleLengthMs;
-        value += asymmetricGaussian(normalizedT, tPosition, tWidth, 0.3 * amp.t * tScale, tDescentFactor);
+        value += biphasicTWave(normalizedT, tPosition, tWidth, 0.3 * amp.t * tScale, tDescentFactor, biphasicFactor);
         break;
       }
 
@@ -1346,7 +1389,7 @@ const EKGPrintout = () => {
           // T wave (positive, discordant)
           const tPosition = qrsStart + qtDuration * 0.85;
           const tWidth = 45 / cycleLengthMs;
-          value += asymmetricGaussian(normalizedT, tPosition, tWidth, 0.3 * tScale, tDescentFactor);
+          value += biphasicTWave(normalizedT, tPosition, tWidth, 0.3 * tScale, tDescentFactor, biphasicFactor);
         } else if (['I', 'aVL', 'V5', 'V6'].includes(lead)) {
           // Broad notched R wave in lateral leads
           const r1Position = qrsStart + (40 * qrsScale) / cycleLengthMs;
@@ -1367,7 +1410,7 @@ const EKGPrintout = () => {
           // T wave (negative, discordant)
           const tPosition = qrsStart + qtDuration * 0.85;
           const tWidth = 45 / cycleLengthMs;
-          value -= asymmetricGaussian(normalizedT, tPosition, tWidth, 0.3 * tScale, tDescentFactor);
+          value -= biphasicTWave(normalizedT, tPosition, tWidth, 0.3 * tScale, tDescentFactor, biphasicFactor);
         } else {
           // Other leads
           const rPosition = qrsStart + (70 * qrsScale) / cycleLengthMs;
@@ -1427,7 +1470,7 @@ const EKGPrintout = () => {
           // T wave
           const tPosition = qrsStart + qtDuration * 0.85;
           const tWidth = 50 / cycleLengthMs;
-          value += asymmetricGaussian(normalizedT, tPosition, tWidth, anteriorSTElev * 0.5 * tScale, tDescentFactor);
+          value += biphasicTWave(normalizedT, tPosition, tWidth, anteriorSTElev * 0.5 * tScale, tDescentFactor, biphasicFactor);
           
           // Apply ST slope
           const stStart = jPoint + 0.02;
@@ -1454,7 +1497,7 @@ const EKGPrintout = () => {
           
           const tPosition = qrsStart + qtDuration * 0.85;
           const tWidth = 45 / cycleLengthMs;
-          value += asymmetricGaussian(normalizedT, tPosition, tWidth, 0.25 * amp.t * tScale, tDescentFactor);
+          value += biphasicTWave(normalizedT, tPosition, tWidth, 0.25 * amp.t * tScale, tDescentFactor, biphasicFactor);
         } else {
           // Other leads - normal morphology
           const rPosition = qrsStart + (30 * qrsScale) / cycleLengthMs;
@@ -1472,7 +1515,7 @@ const EKGPrintout = () => {
           
           const tPosition = qrsStart + qtDuration * 0.85;
           const tWidth = 45 / cycleLengthMs;
-          value += asymmetricGaussian(normalizedT, tPosition, tWidth, 0.3 * amp.t * tScale, tDescentFactor);
+          value += biphasicTWave(normalizedT, tPosition, tWidth, 0.3 * amp.t * tScale, tDescentFactor, biphasicFactor);
         }
         break;
       }
@@ -1521,7 +1564,7 @@ const EKGPrintout = () => {
           // T wave
           const tPosition = qrsStart + qtDuration * 0.85;
           const tWidth = 50 / cycleLengthMs;
-          value += asymmetricGaussian(normalizedT, tPosition, tWidth, inferiorSTElev * 0.5 * tScale, tDescentFactor);
+          value += biphasicTWave(normalizedT, tPosition, tWidth, inferiorSTElev * 0.5 * tScale, tDescentFactor, biphasicFactor);
           
           // Apply ST slope
           const stStart = jPoint + 0.02;
@@ -1548,7 +1591,7 @@ const EKGPrintout = () => {
           
           const tPosition = qrsStart + qtDuration * 0.85;
           const tWidth = 45 / cycleLengthMs;
-          value += asymmetricGaussian(normalizedT, tPosition, tWidth, 0.25 * amp.t * tScale, tDescentFactor);
+          value += biphasicTWave(normalizedT, tPosition, tWidth, 0.25 * amp.t * tScale, tDescentFactor, biphasicFactor);
         } else {
           // Other leads - normal morphology
           const rPosition = qrsStart + (30 * qrsScale) / cycleLengthMs;
@@ -1566,7 +1609,7 @@ const EKGPrintout = () => {
           
           const tPosition = qrsStart + qtDuration * 0.85;
           const tWidth = 45 / cycleLengthMs;
-          value += asymmetricGaussian(normalizedT, tPosition, tWidth, 0.3 * amp.t * tScale, tDescentFactor);
+          value += biphasicTWave(normalizedT, tPosition, tWidth, 0.3 * amp.t * tScale, tDescentFactor, biphasicFactor);
         }
         break;
       }
@@ -1615,7 +1658,7 @@ const EKGPrintout = () => {
           // T wave
           const tPosition = qrsStart + qtDuration * 0.85;
           const tWidth = 50 / cycleLengthMs;
-          value += asymmetricGaussian(normalizedT, tPosition, tWidth, lateralSTElev * 0.5 * tScale, tDescentFactor);
+          value += biphasicTWave(normalizedT, tPosition, tWidth, lateralSTElev * 0.5 * tScale, tDescentFactor, biphasicFactor);
           
           // Apply ST slope
           const stStart = jPoint + 0.02;
@@ -1642,7 +1685,7 @@ const EKGPrintout = () => {
           
           const tPosition = qrsStart + qtDuration * 0.85;
           const tWidth = 45 / cycleLengthMs;
-          value += asymmetricGaussian(normalizedT, tPosition, tWidth, 0.25 * amp.t * tScale, tDescentFactor);
+          value += biphasicTWave(normalizedT, tPosition, tWidth, 0.25 * amp.t * tScale, tDescentFactor, biphasicFactor);
         } else {
           // Other leads - normal morphology
           const rPosition = qrsStart + (30 * qrsScale) / cycleLengthMs;
@@ -1660,7 +1703,7 @@ const EKGPrintout = () => {
           
           const tPosition = qrsStart + qtDuration * 0.85;
           const tWidth = 45 / cycleLengthMs;
-          value += asymmetricGaussian(normalizedT, tPosition, tWidth, 0.3 * amp.t * tScale, tDescentFactor);
+          value += biphasicTWave(normalizedT, tPosition, tWidth, 0.3 * amp.t * tScale, tDescentFactor, biphasicFactor);
         }
         break;
       }
@@ -1703,7 +1746,7 @@ const EKGPrintout = () => {
           
           const tPosition = qrsStart + qtDuration * 0.85;
           const tWidth = 45 / cycleLengthMs;
-          value += asymmetricGaussian(normalizedT, tPosition, tWidth, 0.4 * Math.abs(amp.t) * tScale, tDescentFactor);
+          value += biphasicTWave(normalizedT, tPosition, tWidth, 0.4 * Math.abs(amp.t) * tScale, tDescentFactor, biphasicFactor);
         } else {
           // Other leads - normal morphology
           const rPosition = qrsStart + (30 * qrsScale) / cycleLengthMs;
@@ -1721,7 +1764,7 @@ const EKGPrintout = () => {
           
           const tPosition = qrsStart + qtDuration * 0.85;
           const tWidth = 45 / cycleLengthMs;
-          value += asymmetricGaussian(normalizedT, tPosition, tWidth, 0.3 * amp.t * tScale, tDescentFactor);
+          value += biphasicTWave(normalizedT, tPosition, tWidth, 0.3 * amp.t * tScale, tDescentFactor, biphasicFactor);
         }
         break;
       }
@@ -1759,7 +1802,7 @@ const EKGPrintout = () => {
           // Peaked T wave
           const tPosition = qrsStart + qtDuration * 0.85;
           const tWidth = 25 / cycleLengthMs; // Narrow peaked T
-          value += asymmetricGaussian(normalizedT, tPosition, tWidth, 1.4 * tScale, tDescentFactor);
+          value += biphasicTWave(normalizedT, tPosition, tWidth, 1.4 * tScale, tDescentFactor, biphasicFactor);
         } else if (lead === 'V2') {
           // Deepest S wave
           const sPosition = qrsStart + (55 * qrsScale) / cycleLengthMs;
@@ -1775,7 +1818,7 @@ const EKGPrintout = () => {
           // Tall peaked T wave
           const tPosition = qrsStart + qtDuration * 0.85;
           const tWidth = 25 / cycleLengthMs;
-          value += asymmetricGaussian(normalizedT, tPosition, tWidth, 2.2 * tScale, tDescentFactor);
+          value += biphasicTWave(normalizedT, tPosition, tWidth, 2.2 * tScale, tDescentFactor, biphasicFactor);
         } else if (lead === 'V3') {
           // Deep S wave
           const sPosition = qrsStart + (55 * qrsScale) / cycleLengthMs;
@@ -1791,7 +1834,7 @@ const EKGPrintout = () => {
           // Tallest peaked T wave
           const tPosition = qrsStart + qtDuration * 0.85;
           const tWidth = 25 / cycleLengthMs;
-          value += asymmetricGaussian(normalizedT, tPosition, tWidth, 2.4 * tScale, tDescentFactor);
+          value += biphasicTWave(normalizedT, tPosition, tWidth, 2.4 * tScale, tDescentFactor, biphasicFactor);
         } else if (lead === 'aVR') {
           // aVR: inverted
           const rPosition = qrsStart + (55 * qrsScale) / cycleLengthMs;
@@ -1800,7 +1843,7 @@ const EKGPrintout = () => {
           
           const tPosition = qrsStart + qtDuration * 0.85;
           const tWidth = 25 / cycleLengthMs;
-          value += asymmetricGaussian(normalizedT, tPosition, tWidth, -1.4 * tScale, tDescentFactor);
+          value += biphasicTWave(normalizedT, tPosition, tWidth, -1.4 * tScale, tDescentFactor, biphasicFactor);
         } else {
           // Limb leads and V4-V6: Small R wave, peaked T wave
           const rPosition = qrsStart + (45 * qrsScale) / cycleLengthMs;
@@ -1824,7 +1867,7 @@ const EKGPrintout = () => {
           
           const tPosition = qrsStart + qtDuration * 0.85;
           const tWidth = 25 / cycleLengthMs;
-          value += asymmetricGaussian(normalizedT, tPosition, tWidth, tHeight * tScale, tDescentFactor);
+          value += biphasicTWave(normalizedT, tPosition, tWidth, tHeight * tScale, tDescentFactor, biphasicFactor);
         }
         
         // Apply ST shift if set
@@ -1912,7 +1955,7 @@ const EKGPrintout = () => {
         // T wave
         const tPosition = qrsStart + qtDuration * 0.85;
         const tWidth = 40 / cycleLengthMs;
-        value += asymmetricGaussian(normalizedT, tPosition, tWidth, 0.3 * amp.t * tScale, tDescentFactor);
+        value += biphasicTWave(normalizedT, tPosition, tWidth, 0.3 * amp.t * tScale, tDescentFactor, biphasicFactor);
         break;
       }
 
@@ -1958,7 +2001,7 @@ const EKGPrintout = () => {
         // T wave (often inverted in WPW)
         const tPosition = qrsStart + qtDuration * 0.85;
         const tWidth = 40 / cycleLengthMs;
-        value -= asymmetricGaussian(normalizedT, tPosition, tWidth, 0.2 * amp.t * tScale, tDescentFactor);
+        value -= biphasicTWave(normalizedT, tPosition, tWidth, 0.2 * amp.t * tScale, tDescentFactor, biphasicFactor);
         break;
       }
 
@@ -2002,7 +2045,7 @@ const EKGPrintout = () => {
         // T wave
         const tPosition = qrsStart + qtDuration * 0.85;
         const tWidth = 35 / cycleLengthMs;
-        value += asymmetricGaussian(normalizedT, tPosition, tWidth, 0.3 * amp.t * tScale, tDescentFactor);
+        value += biphasicTWave(normalizedT, tPosition, tWidth, 0.3 * amp.t * tScale, tDescentFactor, biphasicFactor);
         break;
       }
 
@@ -2061,7 +2104,7 @@ const EKGPrintout = () => {
         // T wave
         const tPosition = qrsStart + qtDuration * 0.85;
         const tWidth = 40 / cycleLengthMs;
-        value += asymmetricGaussian(normalizedT, tPosition, tWidth, 0.2 * amp.t * tScale * lowVoltage * alternans, tDescentFactor);
+        value += biphasicTWave(normalizedT, tPosition, tWidth, 0.2 * amp.t * tScale * lowVoltage * alternans, tDescentFactor, biphasicFactor);
         break;
       }
 
@@ -2111,7 +2154,7 @@ const EKGPrintout = () => {
         // T wave
         const tPosition = qrsStart + qtDuration * 0.85;
         const tWidth = 40 / cycleLengthMs;
-        value += asymmetricGaussian(normalizedT, tPosition, tWidth, 0.4 * amp.t * tScale, tDescentFactor);
+        value += biphasicTWave(normalizedT, tPosition, tWidth, 0.4 * amp.t * tScale, tDescentFactor, biphasicFactor);
         break;
       }
 
@@ -2416,7 +2459,7 @@ const EKGPrintout = () => {
         const pixelsPerSecond = (colWidth - 25) / duration;
         for (let px = 0; px < colWidth - 25; px++) {
           const t = px / pixelsPerSecond;
-          const value = generateWaveform(lead, t, pathology, effectiveHR, artifactLevel, rrVariability, waveIrregularity, prInterval, qrsWidth, qtInterval, waveHeight, waveWidth, pWaveAmp, qWaveAmp, rWaveAmp, sWaveAmp, tWaveAmp, stElevation, stDepression, jPointCurve, stSlope, stConcavity, tWaveDescent, leadOverrides);
+          const value = generateWaveform(lead, t, pathology, effectiveHR, artifactLevel, rrVariability, waveIrregularity, prInterval, qrsWidth, qtInterval, waveHeight, waveWidth, pWaveAmp, qWaveAmp, rWaveAmp, sWaveAmp, tWaveAmp, stElevation, stDepression, jPointCurve, stSlope, stConcavity, tWaveDescent, tWaveBiphasic, leadOverrides);
           const x = startX + 20 + px;
           const y = centerY - value * 40;
           if (px === 0) ctx.moveTo(x, y);
@@ -2447,7 +2490,7 @@ const EKGPrintout = () => {
     const rhythmPixelsPerSecond = (width - 25) / rhythmDuration;
     for (let px = 0; px < width - 25; px++) {
       const t = px / rhythmPixelsPerSecond;
-      const value = generateWaveform('II', t, pathology, effectiveHR, artifactLevel, rrVariability, waveIrregularity, prInterval, qrsWidth, qtInterval, waveHeight, waveWidth, pWaveAmp, qWaveAmp, rWaveAmp, sWaveAmp, tWaveAmp, stElevation, stDepression, jPointCurve, stSlope, stConcavity, tWaveDescent, leadOverrides);
+      const value = generateWaveform('II', t, pathology, effectiveHR, artifactLevel, rrVariability, waveIrregularity, prInterval, qrsWidth, qtInterval, waveHeight, waveWidth, pWaveAmp, qWaveAmp, rWaveAmp, sWaveAmp, tWaveAmp, stElevation, stDepression, jPointCurve, stSlope, stConcavity, tWaveDescent, tWaveBiphasic, leadOverrides);
       const x = 20 + px;
       const y = rhythmY + 40 - value * 40;
       if (px === 0) ctx.moveTo(x, y);
@@ -2461,7 +2504,7 @@ const EKGPrintout = () => {
     ctx.font = '10px Arial';
     ctx.fillText('25mm/s  |  10mm/mV  |  Educational Simulation Only', 10, height - 8);
 
-  }, [pathology, heartRate, artifactLevel, rrVariability, waveIrregularity, prInterval, qrsWidth, qtInterval, waveHeight, waveWidth, pWaveAmp, qWaveAmp, rWaveAmp, sWaveAmp, tWaveAmp, stElevation, stDepression, jPointCurve, stSlope, stConcavity, tWaveDescent, leadOverrides]);
+  }, [pathology, heartRate, artifactLevel, rrVariability, waveIrregularity, prInterval, qrsWidth, qtInterval, waveHeight, waveWidth, pWaveAmp, qWaveAmp, rWaveAmp, sWaveAmp, tWaveAmp, stElevation, stDepression, jPointCurve, stSlope, stConcavity, tWaveDescent, tWaveBiphasic, leadOverrides]);
 
   return (
     <div className="min-h-screen bg-gray-100 p-4">
@@ -2823,6 +2866,22 @@ const EKGPrintout = () => {
                   max="100"
                   value={getDisplayValue('tWaveDescent', tWaveDescent)}
                   onChange={(e) => setParamValue('tWaveDescent', Number(e.target.value), setTWaveDescent)}
+                  className="w-full"
+                  disabled={['vfib', 'asystole'].includes(pathology)}
+                />
+              </Tooltip>
+            </div>
+            <div className="w-28">
+              <Tooltip text="Biphasic T wave: Negative = initial inversion (down-up), Zero = monophasic, Positive = terminal inversion (up-down, like Wellens)">
+                <label className="block text-sm font-medium mb-1">
+                  T Biphasic: {getDisplayValue('tWaveBiphasic', tWaveBiphasic)}
+                </label>
+                <input
+                  type="range"
+                  min="-100"
+                  max="100"
+                  value={getDisplayValue('tWaveBiphasic', tWaveBiphasic)}
+                  onChange={(e) => setParamValue('tWaveBiphasic', Number(e.target.value), setTWaveBiphasic)}
                   className="w-full"
                   disabled={['vfib', 'asystole'].includes(pathology)}
                 />
